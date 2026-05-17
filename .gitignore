@@ -1,0 +1,24 @@
+.DS_Store
+.idea/
+
+# Build outputs
+magic-email-go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Logs
+logs
+*.log
+
+# Local environment files
+.env
+.env.*
+
+# Editors
+.idea/
+.vscode/

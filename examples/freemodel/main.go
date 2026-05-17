@@ -1,0 +1,28 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	proxyapi "github.com/free-model/proxy-api-lib"
+	"github.com/free-model/proxy-api-lib/compat/freemodel"
+	"github.com/free-model/proxy-api-lib/domains"
+)
+
+func main() {
+	client := proxyapi.NewClient(
+		proxyapi.WithProvider(freemodel.New()),
+		proxyapi.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+	)
+
+	resp, err := client.Responses.Create(context.Background(), domains.ResponseRequest{
+		Model: os.Getenv("OPENAI_MODEL"),
+		Input: domains.InputText("Say hello in one short sentence."),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(resp.OutputText())
+}
