@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/free-model/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 // ResponsesProvider implements the OpenAI-compatible Responses API.

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	proxyapi "github.com/free-model/proxy-api-lib"
-	"github.com/free-model/proxy-api-lib/compat/freemodel"
-	"github.com/free-model/proxy-api-lib/domains"
+	proxyapi "github.com/wfu-work/proxy-api-lib"
+	"github.com/wfu-work/proxy-api-lib/compat/freemodel"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 func main() {

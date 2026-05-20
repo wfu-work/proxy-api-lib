@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/free-model/proxy-api-lib/compat/chatcompletions"
+	"github.com/wfu-work/proxy-api-lib/compat/chatcompletions"
 )
 
 func TestConvertJSON(t *testing.T) {

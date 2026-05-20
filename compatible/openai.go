@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/free-model/proxy-api-lib/transport"
+	"github.com/wfu-work/proxy-api-lib/transport"
 )
 
 const (

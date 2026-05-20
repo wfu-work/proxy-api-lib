@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/free-model/proxy-api-lib/auth"
-	"github.com/free-model/proxy-api-lib/compatible"
-	"github.com/free-model/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/auth"
+	"github.com/wfu-work/proxy-api-lib/compatible"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 // Config contains the Codex-style model and provider settings this library consumes.

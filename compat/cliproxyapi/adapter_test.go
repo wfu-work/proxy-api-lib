@@ -3,7 +3,7 @@ package cliproxyapi_test
 import (
 	"testing"
 
-	"github.com/free-model/proxy-api-lib/compat/cliproxyapi"
+	"github.com/wfu-work/proxy-api-lib/compat/cliproxyapi"
 )
 
 func TestConvertResponsesJSON(t *testing.T) {

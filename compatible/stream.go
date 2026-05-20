@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/free-model/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 func (p *ResponsesProvider) StreamResponse(ctx context.Context, req domains.ResponseRequest) (*domains.ResponseStream, error) {

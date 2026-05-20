@@ -1,4 +1,4 @@
-package freemodel
+package tokeni
 
 import (
 	"net/http"
@@ -7,14 +7,14 @@ import (
 )
 
 const (
-	Name    = "freemodel"
-	BaseURL = "https://api.freemodel.dev"
+	Name    = "tokeni"
+	BaseURL = "https://api.tokeni.top"
 )
 
-// Option configures the FreeModel provider preset.
+// Option configures the Tokeni provider preset.
 type Option func(*compatible.Config)
 
-// New returns a FreeModel OpenAI-compatible Responses provider.
+// New returns a Tokeni OpenAI-compatible Responses provider.
 func New(opts ...Option) *compatible.ResponsesProvider {
 	cfg := Config()
 	for _, opt := range opts {
@@ -23,7 +23,7 @@ func New(opts ...Option) *compatible.ResponsesProvider {
 	return compatible.OpenAIResponses(cfg)
 }
 
-// Config returns the default FreeModel provider config.
+// Config returns the default Tokeni provider config.
 func Config() compatible.Config {
 	return compatible.Config{
 		Name:    Name,

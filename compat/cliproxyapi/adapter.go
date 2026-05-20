@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/free-model/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 // ConvertResponsesPayload converts a CLIProxyAPI-style Responses payload into a ResponseRequest.

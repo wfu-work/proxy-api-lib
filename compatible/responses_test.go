@@ -9,9 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	proxyapi "github.com/free-model/proxy-api-lib"
-	"github.com/free-model/proxy-api-lib/compatible"
-	"github.com/free-model/proxy-api-lib/domains"
+	proxyapi "github.com/wfu-work/proxy-api-lib"
+	"github.com/wfu-work/proxy-api-lib/compatible"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 func TestCreateResponseSendsOpenAICompatibleRequest(t *testing.T) {

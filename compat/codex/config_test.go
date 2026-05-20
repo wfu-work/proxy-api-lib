@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/free-model/proxy-api-lib/compat/codex"
-	"github.com/free-model/proxy-api-lib/compatible"
+	"github.com/wfu-work/proxy-api-lib/compat/codex"
+	"github.com/wfu-work/proxy-api-lib/compatible"
 )
 
 func TestLoadCodexConfig(t *testing.T) {

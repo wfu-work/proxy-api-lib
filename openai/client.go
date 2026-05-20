@@ -3,7 +3,7 @@ package openai
 import (
 	"net/http"
 
-	"github.com/free-model/proxy-api-lib/compatible"
+	"github.com/wfu-work/proxy-api-lib/compatible"
 )
 
 // Option configures the OpenAI provider.

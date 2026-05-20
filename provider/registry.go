@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	proxyapi "github.com/free-model/proxy-api-lib"
+	proxyapi "github.com/wfu-work/proxy-api-lib"
 )
 
 // Registry stores providers by name.

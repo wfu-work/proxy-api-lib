@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/free-model/proxy-api-lib/auth"
-	"github.com/free-model/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/auth"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 // Provider sends normalized requests to an upstream AI provider.

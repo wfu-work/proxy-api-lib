@@ -3,7 +3,7 @@ package chatcompletions
 import (
 	"encoding/json"
 
-	"github.com/free-model/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 // ConvertPayload converts a Chat Completions-style payload into a Responses request.

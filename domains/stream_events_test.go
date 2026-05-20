@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/free-model/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/domains"
 )
 
 func TestStreamAccumulatorAggregatesTextToolCallsAndCompletion(t *testing.T) {
