@@ -355,4 +355,4 @@ go test ./...
 
 ## License
 
-No license file is currently included. Add a `LICENSE` file before publishing this repository as open source.
+This project is open source based on the MIT License. See [LICENSE](LICENSE) for details.

@@ -355,4 +355,4 @@ go test ./...
 
 ## License
 
-当前仓库还没有包含 license 文件。正式开源发布前请添加 `LICENSE` 文件。
+本项目基于 MIT License 开源，详见 [LICENSE](LICENSE)。
