@@ -1,78 +1,44 @@
-package compatible
+package proxyapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 
-	"github.com/wfu-work/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/openai"
 )
 
-// ResponsesProvider implements the OpenAI-compatible Responses API.
-type ResponsesProvider struct {
-	name       string
-	baseURL    string
-	wireAPI    string
-	httpClient *http.Client
-	headers    map[string]string
-	initErr    error
+// ResponsesService 提供 OpenAI 官方 Responses API。
+type ResponsesService struct {
+	client *Client
 }
 
-func (p *ResponsesProvider) Name() string {
-	return p.name
-}
-
-func (p *ResponsesProvider) CreateResponse(ctx context.Context, req domains.ResponseRequest) (*domains.Response, error) {
-	if p.initErr != nil {
-		return nil, p.initErr
-	}
-	if p.wireAPI != WireAPIResponses {
-		return nil, fmt.Errorf("compatible: unsupported wire api %q", p.wireAPI)
-	}
-	if req.Credential == nil {
-		return nil, errors.New("compatible: credential is required")
-	}
-
+// Create 发送非流式 Responses 请求，并返回完整响应。
+// 请求中的 Credential 非空时会覆盖客户端默认凭据。
+func (s *ResponsesService) Create(ctx context.Context, req openai.ResponseRequest) (*openai.Response, error) {
 	body, err := marshalResponseRequest(req, false)
 	if err != nil {
 		return nil, err
 	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/responses", bytes.NewReader(body))
+	httpReq, err := s.client.newRequest(ctx, http.MethodPost, "/responses", body, "application/json", req.Credential)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
-	for key, value := range p.headers {
-		httpReq.Header.Set(key, value)
-	}
-
-	authHeader, err := req.Credential.AuthorizationHeader(ctx)
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Authorization", authHeader)
-
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := s.client.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	respBody, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return nil, readErr
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseAPIError(p.name, resp.StatusCode, resp.Header.Get("x-request-id"), respBody)
+		return nil, parseAPIError(resp.StatusCode, resp.Header.Get("x-request-id"), respBody)
 	}
-
-	var out domains.Response
+	var out openai.Response
 	if err := json.Unmarshal(respBody, &out); err != nil {
 		return nil, err
 	}
@@ -81,7 +47,9 @@ func (p *ResponsesProvider) CreateResponse(ctx context.Context, req domains.Resp
 	return &out, nil
 }
 
-func marshalResponseRequest(req domains.ResponseRequest, stream bool) ([]byte, error) {
+// marshalResponseRequest 将类型化请求转换为 OpenAI Responses 请求体。
+// stream 为 true 时显式写入 stream 字段，Extra 中的扩展字段最后合并。
+func marshalResponseRequest(req openai.ResponseRequest, stream bool) ([]byte, error) {
 	payload := map[string]any{}
 	if req.Model != "" {
 		payload["model"] = req.Model
@@ -98,11 +66,15 @@ func marshalResponseRequest(req domains.ResponseRequest, stream bool) ([]byte, e
 			if tool == nil {
 				continue
 			}
-			payload, err := toolPayload(tool)
+			data, err := json.Marshal(tool)
 			if err != nil {
 				return nil, err
 			}
-			tools = append(tools, payload)
+			var item map[string]any
+			if err := json.Unmarshal(data, &item); err != nil {
+				return nil, err
+			}
+			tools = append(tools, item)
 		}
 		payload["tools"] = tools
 	}
@@ -139,19 +111,9 @@ func marshalResponseRequest(req domains.ResponseRequest, stream bool) ([]byte, e
 	return json.Marshal(payload)
 }
 
-func toolPayload(tool domains.Tool) (map[string]any, error) {
-	data, err := json.Marshal(tool)
-	if err != nil {
-		return nil, err
-	}
-	var out map[string]any
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func parseAPIError(provider string, statusCode int, requestID string, body []byte) error {
+// parseAPIError 将 OpenAI 错误响应解析为稳定的 APIError。
+// 当响应不符合标准错误结构时，保留状态码和原始响应内容。
+func parseAPIError(statusCode int, requestID string, body []byte) error {
 	var envelope struct {
 		Error struct {
 			Message string `json:"message"`
@@ -160,8 +122,8 @@ func parseAPIError(provider string, statusCode int, requestID string, body []byt
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Message != "" {
-		return &domains.APIError{
-			Provider:   provider,
+		return &openai.APIError{
+			Provider:   "openai",
 			StatusCode: statusCode,
 			Code:       envelope.Error.Code,
 			Type:       envelope.Error.Type,
@@ -169,10 +131,10 @@ func parseAPIError(provider string, statusCode int, requestID string, body []byt
 			RequestID:  requestID,
 		}
 	}
-	return &domains.APIError{
-		Provider:   provider,
+	return &openai.APIError{
+		Provider:   "openai",
 		StatusCode: statusCode,
-		Message:    string(body),
+		Message:    fmt.Sprintf("OpenAI returned status %d: %s", statusCode, string(body)),
 		RequestID:  requestID,
 	}
 }

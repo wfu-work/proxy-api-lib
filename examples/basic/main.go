@@ -5,20 +5,19 @@ import (
 	"fmt"
 	"os"
 
-	proxyapi "github.com/wfu-work/proxy-api-lib"
-	"github.com/wfu-work/proxy-api-lib/domains"
 	"github.com/wfu-work/proxy-api-lib/openai"
+	"github.com/wfu-work/proxy-api-lib/proxyapi"
 )
 
+// main 演示使用 OpenAI Platform API Key 发起非流式 Responses 请求。
 func main() {
 	client := proxyapi.NewClient(
-		proxyapi.WithProvider(openai.New()),
 		proxyapi.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
 	)
 
-	resp, err := client.Responses.Create(context.Background(), domains.ResponseRequest{
+	resp, err := client.Responses.Create(context.Background(), openai.ResponseRequest{
 		Model: os.Getenv("OPENAI_MODEL"),
-		Input: domains.InputText("Say hello in one short sentence."),
+		Input: openai.InputText("Say hello in one short sentence."),
 	})
 	if err != nil {
 		panic(err)

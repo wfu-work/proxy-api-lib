@@ -2,27 +2,85 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`proxy-api-lib` is a small Go library for calling OpenAI-compatible AI providers through one normalized API. It focuses on the Responses API, streaming events, tool calls, OpenAI-compatible provider presets, and compatibility adapters that are useful when building local proxy services, CLI tools, agents, or backend gateways.
+`proxy-api-lib` is a Go client and protocol toolkit that integrates only official OpenAI services. It contains no intermediary-specific logic for Aiok, FreeModel, Tokeni, CodexZH, or similar third-party relays.
 
-The module path is:
+The project keeps two boundaries explicit:
+
+- `proxyapi` and `openai`: the public, stable OpenAI Platform API at `https://api.openai.com/v1`.
+- `codexauth` and `chatgpt`: token parsing, token refresh, usage limits, and subscription queries for official ChatGPT/Codex login accounts.
+
+The `chatgpt` package calls services on `auth.openai.com` and `chatgpt.com`, but the account usage and subscription endpoints are not part of the public, stable OpenAI Platform API. They can change with the ChatGPT/Codex protocol. Application code should use this package instead of depending directly on the internal JSON responses.
+
+Module path:
 
 ```text
 github.com/wfu-work/proxy-api-lib
 ```
 
-## Features
+## What it owns
 
-- OpenAI Responses API wrapper with non-streaming and streaming calls.
-- OpenAI-compatible provider support through configurable `base_url`, provider name, headers, proxy URL, and HTTP client.
-- Built-in provider presets for OpenAI, FreeModel, CodexZH, Aiok, and Tokeni.
-- API key and bearer token credentials.
-- Function tool schema support and function call output helpers.
-- SSE stream reader with typed stream events and accumulator helpers.
-- OpenAI-style API error mapping.
-- Chat Completions payload to Responses request adapter.
-- CLIProxyAPI-style Responses payload adapter.
-- Minimal Codex-style `config.toml` / `auth.json` loader.
-- Optional usage clients for CodexZH, Aiok, and Tokeni.
+- Official OpenAI Responses API, including SSE streaming and tool calls.
+- Official Embeddings and Models resources.
+- OpenAI API key and caller-managed bearer-token credentials.
+- ChatGPT/Codex JWT display-field parsing and OAuth refresh-token exchange.
+- ChatGPT/Codex account limit windows, account lists, and subscription expiry/renewal queries.
+- OpenAI Responses and Chat Completions request/response codecs for gateways.
+- OpenAI-style API errors, organization/project headers, custom HTTP clients, and network proxy configuration.
+
+## What applications own
+
+- OAuth browser login, callbacks, and initial token acquisition.
+- Encrypted storage for access, refresh, and ID tokens.
+- Refresh scheduling, atomic persistence of rotated tokens, and retry after a 401.
+- Account pools, routing, failover, and quota-snapshot persistence.
+- External API authentication and authorization.
+- Request logging and local usage accounting.
+
+## ChatGPT/Codex account information
+
+Given existing ChatGPT/Codex OAuth tokens, parse account display fields and refresh the access token with:
+
+```go
+claims, err := codexauth.ParseUnverifiedClaims(accessToken)
+if err != nil {
+	return err
+}
+accountID := claims.ResolvedAccountID()
+
+oauth := codexauth.NewOAuthClient()
+tokens, err := oauth.Refresh(ctx, refreshToken)
+if err != nil {
+	return err
+}
+accessToken = tokens.AccessToken
+refreshToken = tokens.EffectiveRefreshToken(refreshToken)
+```
+
+`ParseUnverifiedClaims` only decodes the JWT. It does not verify the signature, issuer, or audience, so its result is suitable for display and account routing, not authorization decisions.
+
+Use the access token to query rate-limit windows and subscription information:
+
+```go
+accountClient := chatgpt.NewClient(
+	chatgpt.WithAccessToken(accessToken),
+)
+
+usage, err := accountClient.Usage.Get(ctx, accountID)
+if err != nil {
+	return err
+}
+
+subscription, err := accountClient.Accounts.Subscription(ctx, accountID)
+if err != nil {
+	return err
+}
+```
+
+`usage.RateLimit` contains the used percentage, window duration, and reset time. It commonly represents 5-hour and 7-day windows and preserves additional Code Review, Spark, and future limit buckets. It is not an exact token count. `subscription` contains the plan, subscription state, expiry, and renewal time; fields remain empty when the upstream response does not provide enough information.
+
+Applications that already implement secure refresh and storage can use `chatgpt.WithTokenSource` to read the latest access token before each request.
+
+> OpenAI Platform organization usage and cost reporting is a separate public API authenticated with an organization Admin Key. It is not the same account or billing model as Codex limits included with a ChatGPT plan.
 
 ## Installation
 
@@ -30,9 +88,9 @@ github.com/wfu-work/proxy-api-lib
 go get github.com/wfu-work/proxy-api-lib
 ```
 
-Requires Go 1.22 or newer.
+Requires Go 1.26 or newer.
 
-## Quick Start
+## Responses API
 
 ```go
 package main
@@ -42,20 +100,18 @@ import (
 	"fmt"
 	"os"
 
-	proxyapi "github.com/wfu-work/proxy-api-lib"
-	"github.com/wfu-work/proxy-api-lib/domains"
 	"github.com/wfu-work/proxy-api-lib/openai"
+	"github.com/wfu-work/proxy-api-lib/proxyapi"
 )
 
 func main() {
 	client := proxyapi.NewClient(
-		proxyapi.WithProvider(openai.New()),
 		proxyapi.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
 	)
 
-	resp, err := client.Responses.Create(context.Background(), domains.ResponseRequest{
+	resp, err := client.Responses.Create(context.Background(), openai.ResponseRequest{
 		Model: "gpt-4.1",
-		Input: domains.InputText("Say hello in one short sentence."),
+		Input: openai.InputText("Say hello in one short sentence."),
 	})
 	if err != nil {
 		panic(err)
@@ -65,66 +121,32 @@ func main() {
 }
 ```
 
-## Provider Presets
-
-The provider preset packages are thin wrappers around the OpenAI-compatible Responses implementation.
-
-| Package | Provider name | Default base URL |
-| --- | --- | --- |
-| `openai` | `openai` | `https://api.openai.com/v1` |
-| `compat/freemodel` | `freemodel` | `https://api.freemodel.dev` |
-| `compat/codexzh` | `codexzh` | `https://api.codexzh.com/v1` |
-| `compat/aiok` | `aiok` | `https://aiok.club/v1` |
-| `compat/tokeni` | `tokeni` | `https://api.tokeni.top` |
-
-Example with Tokeni:
+For an access token managed by the application:
 
 ```go
 client := proxyapi.NewClient(
-	proxyapi.WithProvider(tokeni.New()),
-	proxyapi.WithBearerToken(os.Getenv("TOKENI_API_KEY")),
+	proxyapi.WithBearerToken(accessToken),
 )
 ```
 
-Import:
-
-```go
-import "github.com/wfu-work/proxy-api-lib/compat/tokeni"
-```
-
-You can override the upstream endpoint, proxy URL, or HTTP client:
-
-```go
-provider := tokeni.New(
-	tokeni.WithBaseURL("https://example.com/v1"),
-	tokeni.WithProxyURL("http://127.0.0.1:7890"),
-)
-```
-
-For any OpenAI-compatible provider without a preset:
-
-```go
-provider := compatible.OpenAIResponses(compatible.Config{
-	Name:    "custom",
-	BaseURL: "https://example.com/v1",
-	WireAPI: compatible.WireAPIResponses,
-})
-```
+A dynamic token source can implement `auth.TokenSource` and be installed with `auth.FromTokenSource`.
 
 ## Streaming
 
 ```go
-stream, err := client.Responses.Stream(ctx, domains.ResponseRequest{
+stream, err := client.Responses.Stream(ctx, openai.ResponseRequest{
 	Model: "gpt-4.1",
-	Input: domains.InputText("Explain Go interfaces step by step."),
+	Input: openai.InputText("Count from one to three."),
 })
 if err != nil {
 	return err
 }
 defer stream.Close()
 
+acc := openai.NewStreamAccumulator()
 for stream.Next() {
 	event := stream.Event()
+	acc.Add(event)
 	fmt.Print(event.TextDelta())
 }
 if err := stream.Err(); err != nil {
@@ -132,145 +154,28 @@ if err := stream.Err(); err != nil {
 }
 ```
 
-To aggregate streamed text and tool call arguments:
+## Gateway codecs
+
+Incoming OpenAI Responses JSON can be decoded with:
 
 ```go
-acc := domains.NewStreamAccumulator()
-for stream.Next() {
-	acc.Add(stream.Event())
-}
-
-fmt.Println(acc.OutputText())
-for _, call := range acc.ToolCalls() {
-	_ = call
-}
+request, err := responses.Decode(body)
 ```
 
-## Tool Calls
+Incoming Chat Completions JSON can be converted to a Responses request, and a Responses result can be converted back to Chat Completions:
 
 ```go
-resp, err := client.Responses.Create(ctx, domains.ResponseRequest{
-	Model: "gpt-4.1",
-	Input: domains.InputText("Check the weather in Shanghai."),
-	Tools: []domains.Tool{
-		domains.FunctionTool{
-			Name:        "get_weather",
-			Description: "Get weather by city name.",
-			Parameters: domains.JSONSchema{
-				Type: "object",
-				Properties: map[string]domains.JSONSchema{
-					"city": {Type: "string"},
-				},
-				Required: []string{"city"},
-			},
-		},
-	},
-})
-if err != nil {
-	return err
-}
-
-for _, call := range resp.ToolCalls() {
-	result := runTool(call.Name, call.Arguments)
-	resp, err = client.Responses.Create(ctx, domains.ResponseRequest{
-		Model:              "gpt-4.1",
-		PreviousResponseID: resp.ID,
-		Input: []any{
-			domains.FunctionCallOutput(call.CallID, result),
-		},
-	})
-	if err != nil {
-		return err
-	}
-}
+request, err := chatcompletions.Decode(body)
+payload := chatcompletions.Response(model, response)
 ```
 
-## Usage APIs
+The codecs preserve unknown request fields in `ResponseRequest.Extra` so the gateway can remain forward-compatible.
 
-Some third-party providers expose balance or usage endpoints. This library includes small usage clients for the providers already used by the presets.
-
-CodexZH has a dedicated usage endpoint:
+## Errors
 
 ```go
-stats, err := codexzh.NewUsageClient().Fetch(ctx, os.Getenv("CODEXZH_API_KEY"))
-if err != nil {
-	return err
-}
-
-fmt.Println(stats.TodayUsed, stats.WeekUsed)
-```
-
-Aiok and Tokeni use the conventional OpenAI-compatible usage endpoint:
-
-```go
-stats, err := tokeni.NewUsageClient().Fetch(ctx, os.Getenv("TOKENI_API_KEY"))
-if err != nil {
-	return err
-}
-
-fmt.Println(stats.Balance)
-```
-
-Default usage URL generation follows this rule:
-
-- If `base_url` already contains a `/v1` path segment, append `/usage`.
-- Otherwise append `/v1/usage`.
-
-Examples:
-
-```text
-https://aiok.club/v1       -> https://aiok.club/v1/usage
-https://api.tokeni.top     -> https://api.tokeni.top/v1/usage
-https://example.com/api/v1 -> https://example.com/api/v1/usage
-```
-
-## Codex Config Loader
-
-`compat/codex` can load a minimal Codex-style provider configuration without reading or writing user files implicitly.
-
-```go
-cfg, err := codex.Load("~/.codex/config.toml", "~/.codex/auth.json")
-if err != nil {
-	return err
-}
-
-client := proxyapi.NewClient(
-	proxyapi.WithProvider(compatible.OpenAIResponses(cfg.Provider("freemodel"))),
-	proxyapi.WithCredential(cfg.Credential()),
-)
-```
-
-Supported fields include:
-
-- `model`
-- `model_provider`
-- `model_reasoning_effort`
-- `disable_response_storage`
-- `preferred_auth_method`
-- `[model_providers.<name>]`
-- `base_url`
-- `wire_api`
-- `proxy_url`
-
-## Compatibility Adapters
-
-The `compat` directory contains optional adapters for common proxy and CLI payload shapes:
-
-- `compat/chatcompletions`: converts Chat Completions JSON payloads into normalized Responses requests.
-- `compat/cliproxyapi`: converts CLIProxyAPI-style Responses payloads.
-- `compat/codex`: loads minimal Codex-style config and credential data.
-- `compat/freemodel`, `compat/codexzh`, `compat/aiok`, `compat/tokeni`: provider presets.
-
-These adapters are explicit and opt-in. The core package stays provider-neutral.
-
-## Error Handling
-
-Upstream API failures are mapped to `domains.APIError`.
-
-```go
-var apiErr *domains.APIError
+var apiErr *openai.APIError
 if errors.As(err, &apiErr) {
-	fmt.Println(apiErr.Provider)
 	fmt.Println(apiErr.StatusCode)
 	fmt.Println(apiErr.Code)
 	fmt.Println(apiErr.Message)
@@ -278,81 +183,10 @@ if errors.As(err, &apiErr) {
 }
 ```
 
-## Examples
+The Platform client's `WithBaseURL` exists for tests and controlled official OpenAI endpoint deployments. The ChatGPT account client has its own `chatgpt.WithBaseURL`; the two configurations remain isolated. Neither is a provider registry or an intermediary preset mechanism.
 
-Runnable examples live in:
-
-- `examples/basic`
-- `examples/freemodel`
-- `examples/stream`
-
-Run one with:
-
-```bash
-OPENAI_API_KEY=... OPENAI_MODEL=gpt-4.1 go run ./examples/basic
-```
-
-## Testing
-
-Run the unit test suite:
+## Verification
 
 ```bash
 go test ./...
 ```
-
-Integration tests that hit real upstream providers are disabled by default. Enable them explicitly:
-
-```bash
-PROXYAPI_INTEGRATION=1 go test ./...
-```
-
-## Project Layout
-
-```text
-.
-├── auth/                 # Credential implementations
-├── compat/               # Optional compatibility adapters and provider presets
-├── compatible/           # OpenAI-compatible Responses provider
-├── domains/              # Provider-neutral request, response, stream, tool, and error types
-├── examples/             # Runnable examples
-├── openai/               # OpenAI provider preset
-├── provider/             # Provider registry
-└── transport/            # HTTP proxy transport helpers
-```
-
-## Design Goals
-
-- Keep core types stable and provider-neutral.
-- Avoid exposing upstream SDK types in public core APIs.
-- Keep provider-specific behavior in provider packages or `compat` packages.
-- Make compatibility behavior explicit instead of hidden global behavior.
-- Prefer small, testable adapters over a large framework.
-
-## Status
-
-This project currently implements the practical OpenAI-compatible Responses path:
-
-- Non-streaming Responses calls.
-- SSE streaming Responses calls.
-- Function tool schemas and function call output helpers.
-- API key and bearer token authentication.
-- Provider-level proxy configuration.
-- OpenAI, FreeModel, CodexZH, Aiok, and Tokeni presets.
-- Codex, Chat Completions, and CLIProxyAPI compatibility helpers.
-
-APIs may still evolve while the library is being integrated with downstream proxy services.
-
-## Contributing
-
-Issues and pull requests are welcome. For changes that affect public API shape, include tests and a short explanation of the compatibility impact.
-
-Before opening a PR:
-
-```bash
-go fmt ./...
-go test ./...
-```
-
-## License
-
-This project is open source based on the MIT License. See [LICENSE](LICENSE) for details.

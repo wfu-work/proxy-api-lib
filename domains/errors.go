@@ -2,7 +2,7 @@ package domains
 
 import "fmt"
 
-// APIError wraps an upstream provider error in a stable shape.
+// APIError 以稳定结构封装 OpenAI API 返回的错误信息。
 type APIError struct {
 	Provider   string
 	StatusCode int
@@ -13,6 +13,7 @@ type APIError struct {
 	Cause      error
 }
 
+// Error 返回包含服务方、错误消息和可选错误代码的可读文本。
 func (e *APIError) Error() string {
 	if e == nil {
 		return ""
@@ -23,6 +24,7 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Provider, e.Message)
 }
 
+// Unwrap 返回底层错误，使 errors.Is 和 errors.As 可以继续匹配。
 func (e *APIError) Unwrap() error {
 	if e == nil {
 		return nil

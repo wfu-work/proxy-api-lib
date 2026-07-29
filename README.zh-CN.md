@@ -2,7 +2,14 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`proxy-api-lib` 是一个用于调用 OpenAI-compatible AI Provider 的 Go 库。它提供统一的 API，封装 Responses API、流式事件、工具调用、Provider 预设，以及构建本地代理服务、CLI 工具、Agent 或后端网关时常用的兼容适配逻辑。
+`proxy-api-lib` 是只集成 OpenAI 官方服务的 Go 客户端与协议工具库，不包含 Aiok、FreeModel、Tokeni、CodexZH 等第三方中转站逻辑。
+
+工程明确区分两条边界：
+
+- `proxyapi` 和 `openai`：公开稳定的 OpenAI Platform API，默认地址为 `https://api.openai.com/v1`。
+- `codexauth` 和 `chatgpt`：OpenAI 官方 ChatGPT/Codex 登录账号的 Token 解析、刷新、额度和订阅查询。
+
+`chatgpt` 调用的服务位于 `auth.openai.com` 和 `chatgpt.com`，但账号额度与订阅端点不是公开稳定的 OpenAI Platform API，可能随 ChatGPT/Codex 协议调整。业务代码应通过本库访问，不应直接依赖内部响应 JSON。
 
 模块路径：
 
@@ -10,19 +17,72 @@
 github.com/wfu-work/proxy-api-lib
 ```
 
-## 功能特性
+## 工程边界
 
-- 支持 OpenAI Responses API 的非流式与流式调用。
-- 支持通过 `base_url`、Provider 名称、headers、代理 URL、自定义 HTTP client 接入 OpenAI-compatible 上游。
-- 内置 OpenAI、FreeModel、CodexZH、Aiok、Tokeni Provider 预设。
-- 支持 API key 和 bearer token 凭证。
-- 支持 function tool schema 和工具调用结果回传。
-- 支持 SSE 流式读取、强类型流式事件和流聚合 helper。
-- 支持 OpenAI 风格 API 错误映射。
-- 支持 Chat Completions payload 转 Responses request。
-- 支持 CLIProxyAPI 风格 Responses payload 适配。
-- 支持最小 Codex 风格 `config.toml` / `auth.json` 加载。
-- 提供 CodexZH、Aiok、Tokeni 的可选 usage client。
+本库负责：
+
+- OpenAI 官方 Responses API，包括 SSE 流式事件和工具调用。
+- OpenAI 官方 Embeddings 和 Models 资源。
+- OpenAI API Key 与调用方管理的 Bearer Token。
+- ChatGPT/Codex JWT 展示字段解析和 OAuth Refresh Token 刷新。
+- ChatGPT/Codex 账号额度窗口、账号列表和订阅到期/续费时间查询。
+- 面向网关的 OpenAI Responses、Chat Completions 编解码。
+- OpenAI 风格错误、Organization/Project 请求头、自定义 HTTP Client 和网络代理。
+
+应用层负责：
+
+- OAuth 浏览器登录、回调和首次 Token 获取。
+- Access Token、Refresh Token 和 ID Token 的加密存储。
+- Token 刷新调度、刷新结果的原子持久化和 401 后重试。
+- 账号池、路由、故障切换以及额度快照持久化。
+- 对外 API 的身份认证与授权。
+- 请求日志和本地用量统计。
+
+## ChatGPT/Codex 账号信息
+
+已有 ChatGPT/Codex OAuth Token 时，可以解析账号展示字段并刷新 Access Token：
+
+```go
+claims, err := codexauth.ParseUnverifiedClaims(accessToken)
+if err != nil {
+	return err
+}
+accountID := claims.ResolvedAccountID()
+
+oauth := codexauth.NewOAuthClient()
+tokens, err := oauth.Refresh(ctx, refreshToken)
+if err != nil {
+	return err
+}
+accessToken = tokens.AccessToken
+refreshToken = tokens.EffectiveRefreshToken(refreshToken)
+```
+
+`ParseUnverifiedClaims` 只解码 JWT，不验证签名、签发者或受众，结果只能用于展示和账号路由，不能用于授权判断。
+
+使用 Access Token 查询额度窗口和订阅信息：
+
+```go
+accountClient := chatgpt.NewClient(
+	chatgpt.WithAccessToken(accessToken),
+)
+
+usage, err := accountClient.Usage.Get(ctx, accountID)
+if err != nil {
+	return err
+}
+
+subscription, err := accountClient.Accounts.Subscription(ctx, accountID)
+if err != nil {
+	return err
+}
+```
+
+`usage.RateLimit` 返回已用比例、窗口长度和重置时间，通常对应 5 小时和 7 天窗口，并保留 Code Review、Spark 等附加窗口。它不是精确 Token 数量。`subscription` 返回套餐、是否订阅、到期和续费时间；上游缺少字段时相应值会为空。
+
+应用已经实现安全的刷新与存储时，可通过 `chatgpt.WithTokenSource` 在每次请求前读取最新 Access Token。
+
+> OpenAI Platform 的组织用量与费用是另一套公开 API，使用组织 Admin Key。它与 ChatGPT 套餐包含的 Codex 额度不是同一个账户或计费模型。
 
 ## 安装
 
@@ -30,9 +90,9 @@ github.com/wfu-work/proxy-api-lib
 go get github.com/wfu-work/proxy-api-lib
 ```
 
-需要 Go 1.22 或更高版本。
+需要 Go 1.26 或更高版本。
 
-## 快速开始
+## Responses API
 
 ```go
 package main
@@ -42,20 +102,18 @@ import (
 	"fmt"
 	"os"
 
-	proxyapi "github.com/wfu-work/proxy-api-lib"
-	"github.com/wfu-work/proxy-api-lib/domains"
 	"github.com/wfu-work/proxy-api-lib/openai"
+	"github.com/wfu-work/proxy-api-lib/proxyapi"
 )
 
 func main() {
 	client := proxyapi.NewClient(
-		proxyapi.WithProvider(openai.New()),
 		proxyapi.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
 	)
 
-	resp, err := client.Responses.Create(context.Background(), domains.ResponseRequest{
+	resp, err := client.Responses.Create(context.Background(), openai.ResponseRequest{
 		Model: "gpt-4.1",
-		Input: domains.InputText("Say hello in one short sentence."),
+		Input: openai.InputText("用一句话问好。"),
 	})
 	if err != nil {
 		panic(err)
@@ -65,66 +123,32 @@ func main() {
 }
 ```
 
-## Provider 预设
-
-Provider 预设包是 OpenAI-compatible Responses 实现上的轻量封装。
-
-| Package | Provider name | 默认 base URL |
-| --- | --- | --- |
-| `openai` | `openai` | `https://api.openai.com/v1` |
-| `compat/freemodel` | `freemodel` | `https://api.freemodel.dev` |
-| `compat/codexzh` | `codexzh` | `https://api.codexzh.com/v1` |
-| `compat/aiok` | `aiok` | `https://aiok.club/v1` |
-| `compat/tokeni` | `tokeni` | `https://api.tokeni.top` |
-
-Tokeni 示例：
+如果应用层管理的是访问令牌：
 
 ```go
 client := proxyapi.NewClient(
-	proxyapi.WithProvider(tokeni.New()),
-	proxyapi.WithBearerToken(os.Getenv("TOKENI_API_KEY")),
+	proxyapi.WithBearerToken(accessToken),
 )
 ```
 
-导入：
-
-```go
-import "github.com/wfu-work/proxy-api-lib/compat/tokeni"
-```
-
-可以覆盖上游地址、代理 URL 或 HTTP client：
-
-```go
-provider := tokeni.New(
-	tokeni.WithBaseURL("https://example.com/v1"),
-	tokeni.WithProxyURL("http://127.0.0.1:7890"),
-)
-```
-
-没有预设的 OpenAI-compatible Provider 可以直接使用 `compatible.OpenAIResponses`：
-
-```go
-provider := compatible.OpenAIResponses(compatible.Config{
-	Name:    "custom",
-	BaseURL: "https://example.com/v1",
-	WireAPI: compatible.WireAPIResponses,
-})
-```
+动态令牌可实现 `auth.TokenSource`，再通过 `auth.FromTokenSource` 交给客户端。
 
 ## 流式调用
 
 ```go
-stream, err := client.Responses.Stream(ctx, domains.ResponseRequest{
+stream, err := client.Responses.Stream(ctx, openai.ResponseRequest{
 	Model: "gpt-4.1",
-	Input: domains.InputText("Explain Go interfaces step by step."),
+	Input: openai.InputText("从一数到三。"),
 })
 if err != nil {
 	return err
 }
 defer stream.Close()
 
+acc := openai.NewStreamAccumulator()
 for stream.Next() {
 	event := stream.Event()
+	acc.Add(event)
 	fmt.Print(event.TextDelta())
 }
 if err := stream.Err(); err != nil {
@@ -132,145 +156,28 @@ if err := stream.Err(); err != nil {
 }
 ```
 
-聚合流式文本和工具调用参数：
+## 网关协议转换
+
+OpenAI Responses 请求可直接解码：
 
 ```go
-acc := domains.NewStreamAccumulator()
-for stream.Next() {
-	acc.Add(stream.Event())
-}
-
-fmt.Println(acc.OutputText())
-for _, call := range acc.ToolCalls() {
-	_ = call
-}
+request, err := responses.Decode(body)
 ```
 
-## 工具调用
+Chat Completions 请求可以转换成 Responses 请求，Responses 结果也可以转换回 Chat Completions：
 
 ```go
-resp, err := client.Responses.Create(ctx, domains.ResponseRequest{
-	Model: "gpt-4.1",
-	Input: domains.InputText("Check the weather in Shanghai."),
-	Tools: []domains.Tool{
-		domains.FunctionTool{
-			Name:        "get_weather",
-			Description: "Get weather by city name.",
-			Parameters: domains.JSONSchema{
-				Type: "object",
-				Properties: map[string]domains.JSONSchema{
-					"city": {Type: "string"},
-				},
-				Required: []string{"city"},
-			},
-		},
-	},
-})
-if err != nil {
-	return err
-}
-
-for _, call := range resp.ToolCalls() {
-	result := runTool(call.Name, call.Arguments)
-	resp, err = client.Responses.Create(ctx, domains.ResponseRequest{
-		Model:              "gpt-4.1",
-		PreviousResponseID: resp.ID,
-		Input: []any{
-			domains.FunctionCallOutput(call.CallID, result),
-		},
-	})
-	if err != nil {
-		return err
-	}
-}
+request, err := chatcompletions.Decode(body)
+payload := chatcompletions.Response(model, response)
 ```
 
-## Usage API
-
-部分第三方 Provider 提供余额或用量查询接口。本库为已有预设 Provider 提供了轻量 usage client。
-
-CodexZH 使用专用 usage endpoint：
-
-```go
-stats, err := codexzh.NewUsageClient().Fetch(ctx, os.Getenv("CODEXZH_API_KEY"))
-if err != nil {
-	return err
-}
-
-fmt.Println(stats.TodayUsed, stats.WeekUsed)
-```
-
-Aiok 和 Tokeni 使用常规 OpenAI-compatible usage endpoint：
-
-```go
-stats, err := tokeni.NewUsageClient().Fetch(ctx, os.Getenv("TOKENI_API_KEY"))
-if err != nil {
-	return err
-}
-
-fmt.Println(stats.Balance)
-```
-
-默认 usage URL 生成规则：
-
-- 如果 `base_url` 已经包含 `/v1` 路径段，则追加 `/usage`。
-- 否则追加 `/v1/usage`。
-
-示例：
-
-```text
-https://aiok.club/v1       -> https://aiok.club/v1/usage
-https://api.tokeni.top     -> https://api.tokeni.top/v1/usage
-https://example.com/api/v1 -> https://example.com/api/v1/usage
-```
-
-## Codex 配置加载
-
-`compat/codex` 可以加载最小 Codex 风格 Provider 配置。库不会隐式读写用户文件，调用方需要显式传入路径。
-
-```go
-cfg, err := codex.Load("~/.codex/config.toml", "~/.codex/auth.json")
-if err != nil {
-	return err
-}
-
-client := proxyapi.NewClient(
-	proxyapi.WithProvider(compatible.OpenAIResponses(cfg.Provider("freemodel"))),
-	proxyapi.WithCredential(cfg.Credential()),
-)
-```
-
-支持字段：
-
-- `model`
-- `model_provider`
-- `model_reasoning_effort`
-- `disable_response_storage`
-- `preferred_auth_method`
-- `[model_providers.<name>]`
-- `base_url`
-- `wire_api`
-- `proxy_url`
-
-## 兼容适配器
-
-`compat` 目录提供可选适配器：
-
-- `compat/chatcompletions`：将 Chat Completions JSON payload 转为统一 Responses request。
-- `compat/cliproxyapi`：转换 CLIProxyAPI 风格 Responses payload。
-- `compat/codex`：加载最小 Codex 风格配置和凭证。
-- `compat/freemodel`、`compat/codexzh`、`compat/aiok`、`compat/tokeni`：Provider 预设。
-
-这些适配器都是显式使用的，核心包保持 Provider-neutral。
+未知请求字段会保存在 `ResponseRequest.Extra`，便于网关兼容 OpenAI 后续新增字段。
 
 ## 错误处理
 
-上游 API 错误会映射为 `domains.APIError`。
-
 ```go
-var apiErr *domains.APIError
+var apiErr *openai.APIError
 if errors.As(err, &apiErr) {
-	fmt.Println(apiErr.Provider)
 	fmt.Println(apiErr.StatusCode)
 	fmt.Println(apiErr.Code)
 	fmt.Println(apiErr.Message)
@@ -278,81 +185,10 @@ if errors.As(err, &apiErr) {
 }
 ```
 
-## 示例
+Platform 客户端的 `WithBaseURL` 仅用于测试或受控的 OpenAI 官方端点部署，不承担 Provider 注册或第三方中转预设职责。ChatGPT 账号客户端也提供独立的 `chatgpt.WithBaseURL`，两个地址配置不会相互污染。
 
-可运行示例位于：
-
-- `examples/basic`
-- `examples/freemodel`
-- `examples/stream`
-
-运行示例：
-
-```bash
-OPENAI_API_KEY=... OPENAI_MODEL=gpt-4.1 go run ./examples/basic
-```
-
-## 测试
-
-运行单元测试：
+## 验证
 
 ```bash
 go test ./...
 ```
-
-真实上游集成测试默认关闭，需要显式开启：
-
-```bash
-PROXYAPI_INTEGRATION=1 go test ./...
-```
-
-## 项目结构
-
-```text
-.
-├── auth/                 # Credential 实现
-├── compat/               # 可选兼容适配器和 Provider 预设
-├── compatible/           # OpenAI-compatible Responses Provider
-├── domains/              # Provider-neutral 请求、响应、流、工具和错误类型
-├── examples/             # 可运行示例
-├── openai/               # OpenAI Provider 预设
-├── provider/             # Provider registry
-└── transport/            # HTTP proxy transport helper
-```
-
-## 设计目标
-
-- 核心类型稳定，并保持 Provider-neutral。
-- 不在核心公开 API 中暴露上游 SDK 类型。
-- Provider-specific 行为放在 Provider 包或 `compat` 包中。
-- 兼容行为显式启用，不做隐藏全局行为。
-- 偏向小而可测试的 adapter，而不是大型框架。
-
-## 当前状态
-
-当前项目已经实现实用的 OpenAI-compatible Responses 调用链路：
-
-- 非流式 Responses 调用。
-- SSE 流式 Responses 调用。
-- Function tool schema 和工具调用结果回传。
-- API key 和 bearer token 鉴权。
-- Provider 级代理配置。
-- OpenAI、FreeModel、CodexZH、Aiok、Tokeni 预设。
-- Codex、Chat Completions、CLIProxyAPI 兼容 helper。
-
-API 仍可能随着下游代理服务集成继续演进。
-
-## 贡献
-
-欢迎提交 issue 和 pull request。涉及公开 API 形状的改动，请附带测试并说明兼容性影响。
-
-提交 PR 前建议运行：
-
-```bash
-go fmt ./...
-go test ./...
-```
-
-## License
-
-本项目基于 MIT License 开源，详见 [LICENSE](LICENSE)。

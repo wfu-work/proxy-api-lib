@@ -5,8 +5,8 @@ import (
 	"net/url"
 )
 
-// NewHTTPClient returns an HTTP client configured with an optional proxy URL.
-// Empty proxyURL preserves the default Go environment proxy behavior.
+// NewHTTPClient 创建支持可选代理地址的 HTTP 客户端。
+// proxyURL 为空时保留 Go 默认的环境变量代理行为。
 func NewHTTPClient(proxyURL string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if proxyURL != "" {
@@ -19,7 +19,7 @@ func NewHTTPClient(proxyURL string) (*http.Client, error) {
 	return &http.Client{Transport: transport}, nil
 }
 
-// NewHTTPClientNoProxy returns an HTTP client that bypasses HTTP_PROXY/HTTPS_PROXY.
+// NewHTTPClientNoProxy 创建忽略 HTTP_PROXY 和 HTTPS_PROXY 的直连客户端。
 func NewHTTPClientNoProxy() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil

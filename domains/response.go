@@ -2,9 +2,11 @@ package domains
 
 import "encoding/json"
 
-// Response is the provider-neutral Responses API result.
+// Response 描述 OpenAI 官方 Responses API 返回结果。
+// Raw 保留原始 JSON，RequestID 保存响应头中的 OpenAI 请求 ID。
 type Response struct {
 	ID        string          `json:"id,omitempty"`
+	CreatedAt int64           `json:"created_at,omitempty"`
 	Model     string          `json:"model,omitempty"`
 	Status    string          `json:"status,omitempty"`
 	Output    []ResponseItem  `json:"output,omitempty"`
@@ -13,7 +15,7 @@ type Response struct {
 	RequestID string          `json:"-"`
 }
 
-// OutputText returns concatenated text found in output items.
+// OutputText 按输出项顺序拼接所有文本内容。
 func (r *Response) OutputText() string {
 	if r == nil {
 		return ""
@@ -29,7 +31,7 @@ func (r *Response) OutputText() string {
 	return out
 }
 
-// ToolCalls returns function tool calls found in output items.
+// ToolCalls 提取响应中模型发起的全部函数工具调用。
 func (r *Response) ToolCalls() []ToolCall {
 	if r == nil {
 		return nil
@@ -49,7 +51,7 @@ func (r *Response) ToolCalls() []ToolCall {
 	return calls
 }
 
-// ResponseItem is a single output item.
+// ResponseItem 表示 Responses 响应中的单个输出项。
 type ResponseItem struct {
 	ID        string            `json:"id,omitempty"`
 	Type      string            `json:"type,omitempty"`
@@ -62,7 +64,7 @@ type ResponseItem struct {
 	Raw       json.RawMessage   `json:"-"`
 }
 
-// ResponseContent is a content part in an output item.
+// ResponseContent 表示输出项中的一段内容。
 type ResponseContent struct {
 	Type        string          `json:"type,omitempty"`
 	Text        string          `json:"text,omitempty"`
@@ -70,7 +72,7 @@ type ResponseContent struct {
 	Raw         json.RawMessage `json:"-"`
 }
 
-// Usage captures token usage when supplied by the provider.
+// Usage 记录 OpenAI 返回的输入、输出和总 Token 用量。
 type Usage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`

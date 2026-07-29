@@ -1,17 +1,30 @@
-package cliproxyapi
+// Package responses 将 OpenAI 官方 Responses 请求解码为库内类型，
+// 同时保留尚未类型化的扩展字段以支持协议向前兼容。
+package responses
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
-	"github.com/wfu-work/proxy-api-lib/domains"
+	"github.com/wfu-work/proxy-api-lib/openai"
 )
 
-// ConvertResponsesPayload converts a CLIProxyAPI-style Responses payload into a ResponseRequest.
-func ConvertResponsesPayload(payload map[string]any) domains.ResponseRequest {
-	req := domains.ResponseRequest{
-		Extra: map[string]any{},
+// Decode 解码 Responses API JSON 请求，并保留 JSON 数字精度。
+func Decode(data []byte) (openai.ResponseRequest, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var payload map[string]any
+	if err := decoder.Decode(&payload); err != nil {
+		return openai.ResponseRequest{}, err
 	}
+	return FromMap(payload), nil
+}
+
+// FromMap 将通用字段映射转换为类型化 Responses 请求。
+// 未识别字段会保存到 Extra，stream 字段由调用方的传输方式决定。
+func FromMap(payload map[string]any) openai.ResponseRequest {
+	req := openai.ResponseRequest{Extra: map[string]any{}}
 	for key, value := range payload {
 		switch key {
 		case "model":
@@ -34,21 +47,12 @@ func ConvertResponsesPayload(payload map[string]any) domains.ResponseRequest {
 			}
 		case "reasoning":
 			req.Reasoning = convertReasoning(value)
-		case "model_reasoning_effort":
-			if effort, ok := value.(string); ok && effort != "" {
-				req.Reasoning = &domains.Reasoning{Effort: effort}
-			}
 		case "store":
 			if store, ok := value.(bool); ok {
 				req.Store = &store
 			}
-		case "disable_response_storage":
-			if disabled, ok := value.(bool); ok && disabled {
-				store := false
-				req.Store = &store
-			}
 		case "metadata":
-			req.Metadata = convertStringAnyMap(value)
+			req.Metadata = stringMap(value)
 		case "text":
 			req.ResponseFormat = value
 		case "previous_response_id":
@@ -65,58 +69,40 @@ func ConvertResponsesPayload(payload map[string]any) domains.ResponseRequest {
 	return req
 }
 
-// ConvertResponsesJSON converts raw JSON into a ResponseRequest.
-func ConvertResponsesJSON(data []byte) (domains.ResponseRequest, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return domains.ResponseRequest{}, err
-	}
-	return ConvertResponsesPayload(payload), nil
-}
-
-// MustConvertResponsesJSON is a convenience for tests and static examples.
-func MustConvertResponsesJSON(data []byte) domains.ResponseRequest {
-	req, err := ConvertResponsesJSON(data)
-	if err != nil {
-		panic(err)
-	}
-	return req
-}
-
-func convertTools(value any) []domains.Tool {
+// convertTools 将工具数组转换为支持字段透传的 RawTool 列表。
+func convertTools(value any) []openai.Tool {
 	items, ok := value.([]any)
 	if !ok {
 		return nil
 	}
-	tools := make([]domains.Tool, 0, len(items))
+	tools := make([]openai.Tool, 0, len(items))
 	for _, item := range items {
-		if payload := convertStringAnyMap(item); len(payload) > 0 {
-			tools = append(tools, domains.RawTool(payload))
+		if payload := stringMap(item); len(payload) > 0 {
+			tools = append(tools, openai.RawTool(payload))
 		}
 	}
 	return tools
 }
 
-func convertReasoning(value any) *domains.Reasoning {
-	payload := convertStringAnyMap(value)
-	if len(payload) == 0 {
-		return nil
-	}
+// convertReasoning 解析 Responses API 的推理强度配置。
+func convertReasoning(value any) *openai.Reasoning {
+	payload := stringMap(value)
 	effort, _ := payload["effort"].(string)
 	if effort == "" {
 		return nil
 	}
-	return &domains.Reasoning{Effort: effort}
+	return &openai.Reasoning{Effort: effort}
 }
 
-func convertStringAnyMap(value any) map[string]any {
+// stringMap 将常见的动态 map 结构统一转换为 string 键。
+func stringMap(value any) map[string]any {
 	switch typed := value.(type) {
 	case map[string]any:
 		return typed
 	case map[any]any:
 		out := make(map[string]any, len(typed))
-		for key, value := range typed {
-			out[fmt.Sprint(key)] = value
+		for key, item := range typed {
+			out[fmt.Sprint(key)] = item
 		}
 		return out
 	default:
@@ -124,6 +110,7 @@ func convertStringAnyMap(value any) map[string]any {
 	}
 }
 
+// asFloat64 将 JSON 或 Go 数值转换为 float64。
 func asFloat64(value any) (float64, bool) {
 	switch typed := value.(type) {
 	case float64:
@@ -142,6 +129,7 @@ func asFloat64(value any) (float64, bool) {
 	}
 }
 
+// asInt 将 JSON 或 Go 数值转换为 int。
 func asInt(value any) (int, bool) {
 	switch typed := value.(type) {
 	case int:

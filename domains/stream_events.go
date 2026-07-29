@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// Responses API 中受支持的核心流事件类型。
 const (
 	EventResponseCompleted              = "response.completed"
 	EventResponseFailed                 = "response.failed"
@@ -15,7 +16,7 @@ const (
 	EventResponseFunctionArgumentsDone  = "response.function_call_arguments.done"
 )
 
-// TextDelta extracts a common text delta field from Responses stream events.
+// TextDelta 从 Responses 流事件中提取文本增量。
 func (e StreamEvent) TextDelta() string {
 	payload, ok := e.OutputTextDelta()
 	if !ok {
@@ -24,7 +25,7 @@ func (e StreamEvent) TextDelta() string {
 	return payload.Delta
 }
 
-// OutputTextDelta parses response.output_text.delta-style events.
+// OutputTextDelta 解析 response.output_text.delta 事件。
 func (e StreamEvent) OutputTextDelta() (OutputTextDeltaEvent, bool) {
 	var payload OutputTextDeltaEvent
 	if err := json.Unmarshal(e.Data, &payload); err != nil {
@@ -39,7 +40,7 @@ func (e StreamEvent) OutputTextDelta() (OutputTextDeltaEvent, bool) {
 	return payload, payload.Delta != ""
 }
 
-// FunctionCallArgumentsDelta parses function call argument delta events.
+// FunctionCallArgumentsDelta 解析函数调用参数增量事件。
 func (e StreamEvent) FunctionCallArgumentsDelta() (FunctionCallArgumentsDeltaEvent, bool) {
 	var payload FunctionCallArgumentsDeltaEvent
 	if err := json.Unmarshal(e.Data, &payload); err != nil {
@@ -54,7 +55,7 @@ func (e StreamEvent) FunctionCallArgumentsDelta() (FunctionCallArgumentsDeltaEve
 	return payload, payload.Delta != ""
 }
 
-// OutputItemAdded parses response.output_item.added events.
+// OutputItemAdded 解析 response.output_item.added 事件。
 func (e StreamEvent) OutputItemAdded() (OutputItemAddedEvent, bool) {
 	var payload OutputItemAddedEvent
 	if err := json.Unmarshal(e.Data, &payload); err != nil {
@@ -66,7 +67,7 @@ func (e StreamEvent) OutputItemAdded() (OutputItemAddedEvent, bool) {
 	return payload, payload.Item.Type != ""
 }
 
-// CompletedResponse parses response.completed events.
+// CompletedResponse 从 response.completed 事件中解析最终响应。
 func (e StreamEvent) CompletedResponse() (*Response, bool) {
 	var payload struct {
 		Type     string   `json:"type"`
@@ -84,7 +85,7 @@ func (e StreamEvent) CompletedResponse() (*Response, bool) {
 	return &payload.Response, true
 }
 
-// OutputTextDeltaEvent is the common payload for text deltas.
+// OutputTextDeltaEvent 描述文本输出增量事件。
 type OutputTextDeltaEvent struct {
 	Type         string `json:"type,omitempty"`
 	ItemID       string `json:"item_id,omitempty"`
@@ -94,7 +95,7 @@ type OutputTextDeltaEvent struct {
 	Text         string `json:"text,omitempty"`
 }
 
-// UnmarshalJSON accepts both delta and text fields as text increments.
+// UnmarshalJSON 同时兼容 delta 和 text 字段，并统一写入 Delta。
 func (e *OutputTextDeltaEvent) UnmarshalJSON(data []byte) error {
 	type alias OutputTextDeltaEvent
 	var out alias
@@ -108,7 +109,7 @@ func (e *OutputTextDeltaEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// FunctionCallArgumentsDeltaEvent is a function-call arguments delta.
+// FunctionCallArgumentsDeltaEvent 描述函数调用参数增量。
 type FunctionCallArgumentsDeltaEvent struct {
 	Type        string `json:"type,omitempty"`
 	ItemID      string `json:"item_id,omitempty"`
@@ -117,14 +118,14 @@ type FunctionCallArgumentsDeltaEvent struct {
 	Delta       string `json:"delta,omitempty"`
 }
 
-// OutputItemAddedEvent carries a new output item.
+// OutputItemAddedEvent 携带新加入响应流的输出项。
 type OutputItemAddedEvent struct {
 	Type        string       `json:"type,omitempty"`
 	OutputIndex int          `json:"output_index,omitempty"`
 	Item        ResponseItem `json:"item,omitempty"`
 }
 
-// StreamAccumulator aggregates a Responses stream into text and tool calls.
+// StreamAccumulator 将 Responses 流聚合为文本、工具调用和最终响应。
 type StreamAccumulator struct {
 	text      strings.Builder
 	calls     map[string]*ToolCall
@@ -132,12 +133,12 @@ type StreamAccumulator struct {
 	completed *Response
 }
 
-// NewStreamAccumulator creates an empty stream accumulator.
+// NewStreamAccumulator 创建空的流事件聚合器。
 func NewStreamAccumulator() *StreamAccumulator {
 	return &StreamAccumulator{calls: map[string]*ToolCall{}}
 }
 
-// Add folds a stream event into the accumulator.
+// Add 将一条流事件合并到当前聚合结果。
 func (a *StreamAccumulator) Add(event StreamEvent) {
 	if a.calls == nil {
 		a.calls = map[string]*ToolCall{}
@@ -168,7 +169,7 @@ func (a *StreamAccumulator) Add(event StreamEvent) {
 	}
 }
 
-// Text returns the aggregated text deltas.
+// Text 返回按事件顺序拼接后的文本。
 func (a *StreamAccumulator) Text() string {
 	if a == nil {
 		return ""
@@ -176,7 +177,7 @@ func (a *StreamAccumulator) Text() string {
 	return a.text.String()
 }
 
-// ToolCalls returns aggregated function calls in first-seen order.
+// ToolCalls 按首次出现顺序返回聚合后的函数调用。
 func (a *StreamAccumulator) ToolCalls() []ToolCall {
 	if a == nil {
 		return nil
@@ -190,7 +191,7 @@ func (a *StreamAccumulator) ToolCalls() []ToolCall {
 	return calls
 }
 
-// CompletedResponse returns the final response from a response.completed event.
+// CompletedResponse 返回 response.completed 事件携带的最终响应。
 func (a *StreamAccumulator) CompletedResponse() *Response {
 	if a == nil {
 		return nil
@@ -198,6 +199,7 @@ func (a *StreamAccumulator) CompletedResponse() *Response {
 	return a.completed
 }
 
+// storeCall 保存或更新函数调用，并维持首次出现的顺序。
 func (a *StreamAccumulator) storeCall(key string, call ToolCall) {
 	if existing := a.calls[key]; existing != nil {
 		if call.ID != "" {
@@ -218,6 +220,7 @@ func (a *StreamAccumulator) storeCall(key string, call ToolCall) {
 	a.callOrder = append(a.callOrder, key)
 }
 
+// ensureCall 获取已有函数调用；不存在时创建一个用于接收后续参数增量。
 func (a *StreamAccumulator) ensureCall(key, itemID, callID string, outputIndex int) *ToolCall {
 	if call := a.calls[key]; call != nil {
 		return call
@@ -232,6 +235,7 @@ func (a *StreamAccumulator) ensureCall(key, itemID, callID string, outputIndex i
 	return &call
 }
 
+// callKey 根据可用标识生成稳定的函数调用聚合键。
 func callKey(itemID, callID string, outputIndex int) string {
 	if itemID != "" {
 		return "item:" + itemID

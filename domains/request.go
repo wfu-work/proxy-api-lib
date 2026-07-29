@@ -1,6 +1,7 @@
 package domains
 
-// ResponseRequest is the provider-neutral request shape for the Responses API.
+// ResponseRequest 描述 OpenAI 官方 Responses API 请求。
+// Extra 用于透传库尚未建模的新字段，Credential 可覆盖客户端默认凭据。
 type ResponseRequest struct {
 	Model              string         `json:"model,omitempty"`
 	Input              any            `json:"input,omitempty"`
@@ -18,12 +19,12 @@ type ResponseRequest struct {
 	PreviousResponseID string         `json:"previous_response_id,omitempty"`
 }
 
-// InputText is a convenience helper for simple text prompts.
+// InputText 将简单文本转换为可直接用作 Responses input 的值。
 func InputText(text string) string {
 	return text
 }
 
-// Reasoning contains reasoning-specific request knobs.
+// Reasoning 描述模型推理强度等相关请求参数。
 type Reasoning struct {
 	Effort string `json:"effort,omitempty"`
 }

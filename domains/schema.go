@@ -1,6 +1,6 @@
 package domains
 
-// JSONSchema is a minimal JSON Schema representation for function tools.
+// JSONSchema 是函数工具参数使用的基础 JSON Schema 描述。
 type JSONSchema struct {
 	Type                 string                `json:"type,omitempty"`
 	Description          string                `json:"description,omitempty"`

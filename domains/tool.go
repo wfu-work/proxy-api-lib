@@ -2,12 +2,12 @@ package domains
 
 import "encoding/json"
 
-// Tool is implemented by concrete tool definitions.
+// Tool 是所有 OpenAI 工具定义需要实现的接口。
 type Tool interface {
 	json.Marshaler
 }
 
-// FunctionTool describes a function tool available to the model.
+// FunctionTool 描述可供模型调用的函数工具。
 type FunctionTool struct {
 	Name        string     `json:"name,omitempty"`
 	Description string     `json:"description,omitempty"`
@@ -15,6 +15,7 @@ type FunctionTool struct {
 	Strict      *bool      `json:"strict,omitempty"`
 }
 
+// toolPayload 将函数工具转换为 OpenAI Responses API 接受的字段结构。
 func (t FunctionTool) toolPayload() map[string]any {
 	payload := map[string]any{
 		"type":        "function",
@@ -28,19 +29,20 @@ func (t FunctionTool) toolPayload() map[string]any {
 	return payload
 }
 
-// MarshalJSON keeps the public Tool interface ergonomic while producing OpenAI-compatible JSON.
+// MarshalJSON 将函数工具编码为 OpenAI 所需的 JSON 结构。
 func (t FunctionTool) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.toolPayload())
 }
 
-// RawTool allows callers to pass provider-specific tool payloads.
+// RawTool 允许调用方透传尚未被库类型化的 OpenAI 工具定义。
 type RawTool map[string]any
 
+// MarshalJSON 原样编码调用方提供的工具字段。
 func (t RawTool) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]any(t))
 }
 
-// ToolCall describes a function call requested by the model.
+// ToolCall 描述模型请求执行的一次函数调用。
 type ToolCall struct {
 	ID          string
 	CallID      string
@@ -49,7 +51,8 @@ type ToolCall struct {
 	OutputIndex int
 }
 
-// FunctionCallOutput builds a Responses API input item for returning tool output.
+// FunctionCallOutput 构造向 Responses API 回传函数执行结果的输入项。
+// 非字符串结果会优先编码为 JSON 字符串。
 func FunctionCallOutput(callID string, output any) map[string]any {
 	outputString, ok := output.(string)
 	if !ok {
