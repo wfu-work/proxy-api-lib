@@ -9,6 +9,8 @@
 - `proxyapi` 和 `openai`：公开稳定的 OpenAI Platform API，默认地址为 `https://api.openai.com/v1`。
 - `codexauth` 和 `chatgpt`：OpenAI 官方 ChatGPT/Codex 登录账号的 Token 解析、刷新、额度和订阅查询。
 
+FreeAI 这类 OAuth 账号池只使用第二条边界访问上游。`proxyapi` 支持的 Platform API Key 是基础库面向其他调用方的独立能力，不会作为 `chatgpt` 的备用凭据。
+
 `chatgpt` 调用的服务位于 `auth.openai.com` 和 `chatgpt.com`，但账号额度与订阅端点不是公开稳定的 OpenAI Platform API，可能随 ChatGPT/Codex 协议调整。业务代码应通过本库访问，不应直接依赖内部响应 JSON。
 
 模块路径：
@@ -25,13 +27,16 @@ github.com/wfu-work/proxy-api-lib
 - OpenAI 官方 Embeddings 和 Models 资源。
 - OpenAI API Key 与调用方管理的 Bearer Token。
 - ChatGPT/Codex JWT 展示字段解析和 OAuth Refresh Token 刷新。
-- ChatGPT/Codex 账号额度窗口、账号列表和订阅到期/续费时间查询。
+- 规范 OAuth 账号文件解析与标准化导出。
+- ChatGPT/Codex wham 额度窗口、账号列表、`accounts/check` + `subscriptions` 合并，以及订阅到期/续费查询。
+- 官方 Codex 模型发现、Responses 请求和 `x-codex-*` 响应头保留。
+- Codex 请求形态规范化，以及面向非流式调用方的上游 SSE 聚合。
 - 面向网关的 OpenAI Responses、Chat Completions 编解码。
 - OpenAI 风格错误、Organization/Project 请求头、自定义 HTTP Client 和网络代理。
 
 应用层负责：
 
-- OAuth 浏览器登录、回调和首次 Token 获取。
+- 在本库之外完成首次 OAuth Token 获取，或导入已有规范账号文件。
 - Access Token、Refresh Token 和 ID Token 的加密存储。
 - Token 刷新调度、刷新结果的原子持久化和 401 后重试。
 - 账号池、路由、故障切换以及额度快照持久化。
@@ -58,6 +63,8 @@ accessToken = tokens.AccessToken
 refreshToken = tokens.EffectiveRefreshToken(refreshToken)
 ```
 
+已有账号导出文件也可以通过 `codexauth.ParseAccountFile` 解析和标准化；应用应对完整规范文件进行静态加密。
+
 `ParseUnverifiedClaims` 只解码 JWT，不验证签名、签发者或受众，结果只能用于展示和账号路由，不能用于授权判断。
 
 使用 Access Token 查询额度窗口和订阅信息：
@@ -76,9 +83,11 @@ subscription, err := accountClient.Accounts.Subscription(ctx, accountID)
 if err != nil {
 	return err
 }
+
+models, err := accountClient.Codex.Models(ctx, accountID, clientVersion)
 ```
 
-`usage.RateLimit` 返回已用比例、窗口长度和重置时间，通常对应 5 小时和 7 天窗口，并保留 Code Review、Spark 等附加窗口。它不是精确 Token 数量。`subscription` 返回套餐、是否订阅、到期和续费时间；上游缺少字段时相应值会为空。
+`usage.RateLimit` 返回已用比例、窗口长度和重置时间，通常对应 5 小时和 7 天窗口，并保留 Code Review、Spark 等附加窗口。它不是精确 Token 数量。`Subscription` 会在可用时同时查询两类账号接口，补齐套餐、订阅状态、到期、续费时间和 `WillRenew`，不会猜测上游未提供的值。
 
 应用已经实现安全的刷新与存储时，可通过 `chatgpt.WithTokenSource` 在每次请求前读取最新 Access Token。
 

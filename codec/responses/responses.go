@@ -21,6 +21,70 @@ func Decode(data []byte) (openai.ResponseRequest, error) {
 	return FromMap(payload), nil
 }
 
+// Encode 将库内 Responses 请求编码为上游 JSON。
+// stream 由传输层决定，Extra 中的前向兼容字段最后覆盖类型化字段。
+func Encode(req openai.ResponseRequest, stream bool) ([]byte, error) {
+	payload := map[string]any{}
+	if req.Model != "" {
+		payload["model"] = req.Model
+	}
+	if req.Input != nil {
+		payload["input"] = req.Input
+	}
+	if req.Instructions != "" {
+		payload["instructions"] = req.Instructions
+	}
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]any, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			if tool == nil {
+				continue
+			}
+			data, err := json.Marshal(tool)
+			if err != nil {
+				return nil, err
+			}
+			var item map[string]any
+			if err := json.Unmarshal(data, &item); err != nil {
+				return nil, err
+			}
+			tools = append(tools, item)
+		}
+		payload["tools"] = tools
+	}
+	if req.ToolChoice != nil {
+		payload["tool_choice"] = req.ToolChoice
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
+	if req.MaxOutputTokens != nil {
+		payload["max_output_tokens"] = *req.MaxOutputTokens
+	}
+	if req.Reasoning != nil {
+		payload["reasoning"] = req.Reasoning
+	}
+	if req.Store != nil {
+		payload["store"] = *req.Store
+	}
+	if len(req.Metadata) > 0 {
+		payload["metadata"] = req.Metadata
+	}
+	if req.ResponseFormat != nil {
+		payload["text"] = req.ResponseFormat
+	}
+	if req.PreviousResponseID != "" {
+		payload["previous_response_id"] = req.PreviousResponseID
+	}
+	if stream {
+		payload["stream"] = true
+	}
+	for key, value := range req.Extra {
+		payload[key] = value
+	}
+	return json.Marshal(payload)
+}
+
 // FromMap 将通用字段映射转换为类型化 Responses 请求。
 // 未识别字段会保存到 Extra，stream 字段由调用方的传输方式决定。
 func FromMap(payload map[string]any) openai.ResponseRequest {

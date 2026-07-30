@@ -9,6 +9,8 @@ The project keeps two boundaries explicit:
 - `proxyapi` and `openai`: the public, stable OpenAI Platform API at `https://api.openai.com/v1`.
 - `codexauth` and `chatgpt`: token parsing, token refresh, usage limits, and subscription queries for official ChatGPT/Codex login accounts.
 
+OAuth account-pool applications such as FreeAI use only the second boundary for upstream access. Platform API keys accepted by `proxyapi` are a separate library capability and are not a fallback credential for `chatgpt`.
+
 The `chatgpt` package calls services on `auth.openai.com` and `chatgpt.com`, but the account usage and subscription endpoints are not part of the public, stable OpenAI Platform API. They can change with the ChatGPT/Codex protocol. Application code should use this package instead of depending directly on the internal JSON responses.
 
 Module path:
@@ -23,13 +25,16 @@ github.com/wfu-work/proxy-api-lib
 - Official Embeddings and Models resources.
 - OpenAI API key and caller-managed bearer-token credentials.
 - ChatGPT/Codex JWT display-field parsing and OAuth refresh-token exchange.
-- ChatGPT/Codex account limit windows, account lists, and subscription expiry/renewal queries.
+- Canonical OAuth account-file parsing and normalized export.
+- ChatGPT/Codex wham limit windows, account lists, merged `accounts/check` + `subscriptions` data, and subscription expiry/renewal queries.
+- Official Codex model discovery and Responses calls with `x-codex-*` response-header preservation.
+- Codex request normalization and SSE aggregation for callers that request a non-streaming response.
 - OpenAI Responses and Chat Completions request/response codecs for gateways.
 - OpenAI-style API errors, organization/project headers, custom HTTP clients, and network proxy configuration.
 
 ## What applications own
 
-- OAuth browser login, callbacks, and initial token acquisition.
+- Initial OAuth token acquisition outside this library, or import of an existing canonical account file.
 - Encrypted storage for access, refresh, and ID tokens.
 - Refresh scheduling, atomic persistence of rotated tokens, and retry after a 401.
 - Account pools, routing, failover, and quota-snapshot persistence.
@@ -56,6 +61,8 @@ accessToken = tokens.AccessToken
 refreshToken = tokens.EffectiveRefreshToken(refreshToken)
 ```
 
+An existing account export can instead be normalized with `codexauth.ParseAccountFile`; applications should encrypt the complete normalized file at rest.
+
 `ParseUnverifiedClaims` only decodes the JWT. It does not verify the signature, issuer, or audience, so its result is suitable for display and account routing, not authorization decisions.
 
 Use the access token to query rate-limit windows and subscription information:
@@ -74,9 +81,11 @@ subscription, err := accountClient.Accounts.Subscription(ctx, accountID)
 if err != nil {
 	return err
 }
+
+models, err := accountClient.Codex.Models(ctx, accountID, clientVersion)
 ```
 
-`usage.RateLimit` contains the used percentage, window duration, and reset time. It commonly represents 5-hour and 7-day windows and preserves additional Code Review, Spark, and future limit buckets. It is not an exact token count. `subscription` contains the plan, subscription state, expiry, and renewal time; fields remain empty when the upstream response does not provide enough information.
+`usage.RateLimit` contains the used percentage, window duration, and reset time. It commonly represents 5-hour and 7-day windows and preserves additional Code Review, Spark, and future limit buckets. It is not an exact token count. `Subscription` queries both account sources when available and fills missing plan, subscription state, expiry, renewal time, and `WillRenew` fields without inventing values.
 
 Applications that already implement secure refresh and storage can use `chatgpt.WithTokenSource` to read the latest access token before each request.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 )
 
 const accountsCheckPath = "/accounts/check/v4-2023-04-27"
+
+const subscriptionsPath = "/subscriptions"
 
 // AccountsService 提供 ChatGPT 账号与订阅权益查询。
 type AccountsService struct{ client *Client }
@@ -105,9 +108,28 @@ type SubscriptionSnapshot struct {
 	SubscriptionPlan string
 	ExpiresAt        *time.Time
 	RenewsAt         *time.Time
+	WillRenew        *bool
 	Entry            AccountEntry
 	Raw              json.RawMessage
 	RequestID        string
+}
+
+// DirectSubscriptionResponse 是 subscriptions 接口的宽松响应结构。
+// 不同订阅版本可能使用 plan_type/subscription_plan 和 active_until/expires_at 等不同字段。
+type DirectSubscriptionResponse struct {
+	AccountID             string          `json:"account_id,omitempty"`
+	AccountPlanType       string          `json:"account_plan_type,omitempty"`
+	PlanType              string          `json:"plan_type,omitempty"`
+	SubscriptionPlan      string          `json:"subscription_plan,omitempty"`
+	ExpiresAt             *Timestamp      `json:"expires_at,omitempty"`
+	ActiveUntil           *Timestamp      `json:"active_until,omitempty"`
+	RenewsAt              *Timestamp      `json:"renews_at,omitempty"`
+	NextRenewalAt         *Timestamp      `json:"next_renewal_at,omitempty"`
+	HasSubscription       *bool           `json:"has_subscription,omitempty"`
+	HasActiveSubscription *bool           `json:"has_active_subscription,omitempty"`
+	WillRenew             *bool           `json:"will_renew,omitempty"`
+	Raw                   json.RawMessage `json:"-"`
+	RequestID             string          `json:"-"`
 }
 
 // Check 获取当前 OAuth Token 可访问的全部 ChatGPT 账号和权益。
@@ -139,18 +161,104 @@ func (s *AccountsService) Check(ctx context.Context) (*AccountsCheckResponse, er
 // Subscription 查询并标准化指定账号的订阅信息。
 // accountID 未匹配时依次选择默认账号、付费账号和第一个账号。
 func (s *AccountsService) Subscription(ctx context.Context, accountID string) (*SubscriptionSnapshot, error) {
-	response, err := s.Check(ctx)
+	requestedID := strings.TrimSpace(accountID)
+	selectedID := requestedID
+	var checkSnapshot *SubscriptionSnapshot
+	response, checkErr := s.Check(ctx)
+	if checkErr == nil {
+		resolvedID, entry, ok := selectAccount(response.Accounts, accountID)
+		if ok {
+			selectedID = resolvedID
+			snapshot := buildSubscriptionSnapshot(selectedID, entry)
+			snapshot.Raw = response.Raw
+			snapshot.RequestID = response.RequestID
+			checkSnapshot = &snapshot
+		}
+	}
+
+	direct, directErr := s.DirectSubscription(ctx, selectedID)
+	if directErr != nil {
+		if checkSnapshot != nil {
+			return checkSnapshot, nil
+		}
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		return nil, directErr
+	}
+	directSnapshot := directSubscriptionSnapshot(firstNonEmpty(selectedID, requestedID), direct)
+	if checkSnapshot == nil {
+		return &directSnapshot, nil
+	}
+	snapshot := mergeSubscriptionSnapshots(*checkSnapshot, directSnapshot)
+	if raw, marshalErr := json.Marshal(map[string]json.RawMessage{
+		"accountsCheck": response.Raw,
+		"subscription":  direct.Raw,
+	}); marshalErr == nil {
+		snapshot.Raw = raw
+	}
+	return &snapshot, nil
+}
+
+// DirectSubscription 直接查询 subscriptions 接口。
+// 一些账号只在该接口暴露订阅到期信息，因此它也是 accounts/check 的补充来源。
+func (s *AccountsService) DirectSubscription(ctx context.Context, accountID string) (*DirectSubscriptionResponse, error) {
+	path := subscriptionsPath
+	if accountID = strings.TrimSpace(accountID); accountID != "" {
+		path += "?" + url.Values{"account_id": []string{accountID}}.Encode()
+	}
+	req, err := s.client.newRequest(ctx, http.MethodGet, path, accountID, nil)
 	if err != nil {
 		return nil, err
 	}
-	selectedID, entry, ok := selectAccount(response.Accounts, accountID)
-	if !ok {
-		return &SubscriptionSnapshot{Raw: response.Raw, RequestID: response.RequestID}, nil
+	body, requestID, err := s.client.doJSON(req)
+	if err != nil {
+		return nil, err
 	}
-	snapshot := buildSubscriptionSnapshot(selectedID, entry)
-	snapshot.Raw = response.Raw
-	snapshot.RequestID = response.RequestID
-	return &snapshot, nil
+	var response DirectSubscriptionResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	response.Raw = append(response.Raw[:0], body...)
+	response.RequestID = requestID
+	return &response, nil
+}
+
+func directSubscriptionSnapshot(requestedID string, direct *DirectSubscriptionResponse) SubscriptionSnapshot {
+	snapshot := SubscriptionSnapshot{AccountID: strings.TrimSpace(requestedID)}
+	if direct == nil {
+		return snapshot
+	}
+	if value := strings.TrimSpace(direct.AccountID); value != "" {
+		snapshot.AccountID = value
+	}
+	snapshot.AccountPlanType = normalizePlan(firstNonEmpty(direct.AccountPlanType, direct.PlanType))
+	snapshot.SubscriptionPlan = normalizePlan(firstNonEmpty(direct.SubscriptionPlan, direct.PlanType, direct.AccountPlanType))
+	snapshot.ExpiresAt = timestampTime(direct.ExpiresAt)
+	if snapshot.ExpiresAt == nil {
+		snapshot.ExpiresAt = timestampTime(direct.ActiveUntil)
+	}
+	snapshot.RenewsAt = timestampTime(direct.RenewsAt)
+	if snapshot.RenewsAt == nil {
+		snapshot.RenewsAt = timestampTime(direct.NextRenewalAt)
+	}
+	if direct.HasActiveSubscription != nil {
+		snapshot.HasSubscription = boolPointer(*direct.HasActiveSubscription)
+	} else if direct.HasSubscription != nil {
+		snapshot.HasSubscription = boolPointer(*direct.HasSubscription)
+	} else if snapshot.AccountPlanType != "" || snapshot.SubscriptionPlan != "" || snapshot.ExpiresAt != nil {
+		hasSubscription := snapshot.AccountPlanType != "free" && snapshot.SubscriptionPlan != "free"
+		snapshot.HasSubscription = boolPointer(hasSubscription)
+	}
+	if snapshot.RenewsAt == nil && direct.WillRenew != nil && *direct.WillRenew {
+		snapshot.RenewsAt = snapshot.ExpiresAt
+	}
+	if direct.WillRenew != nil {
+		snapshot.WillRenew = boolPointer(*direct.WillRenew)
+	}
+	snapshot.Raw = direct.Raw
+	snapshot.RequestID = direct.RequestID
+	return snapshot
 }
 
 // selectAccount 按明确 ID、默认、付费和稳定排序选择账号。
@@ -205,9 +313,41 @@ func buildSubscriptionSnapshot(accountID string, entry AccountEntry) Subscriptio
 		if snapshot.RenewsAt == nil && entry.Entitlement.WillRenew != nil && *entry.Entitlement.WillRenew {
 			snapshot.RenewsAt = snapshot.ExpiresAt
 		}
+		if entry.Entitlement.WillRenew != nil {
+			snapshot.WillRenew = boolPointer(*entry.Entitlement.WillRenew)
+		}
 	}
 	snapshot.HasSubscription = resolvedSubscriptionState(entry, snapshot)
 	return snapshot
+}
+
+// mergeSubscriptionSnapshots 保留 accounts/check 的明确字段，并用 subscriptions 补齐缺失信息。
+func mergeSubscriptionSnapshots(primary, supplement SubscriptionSnapshot) SubscriptionSnapshot {
+	if primary.AccountID == "" {
+		primary.AccountID = supplement.AccountID
+	}
+	if primary.HasSubscription == nil {
+		primary.HasSubscription = supplement.HasSubscription
+	}
+	if primary.AccountPlanType == "" {
+		primary.AccountPlanType = supplement.AccountPlanType
+	}
+	if primary.SubscriptionPlan == "" {
+		primary.SubscriptionPlan = supplement.SubscriptionPlan
+	}
+	if primary.ExpiresAt == nil {
+		primary.ExpiresAt = supplement.ExpiresAt
+	}
+	if primary.RenewsAt == nil {
+		primary.RenewsAt = supplement.RenewsAt
+	}
+	if primary.WillRenew == nil {
+		primary.WillRenew = supplement.WillRenew
+	}
+	if primary.RequestID == "" {
+		primary.RequestID = supplement.RequestID
+	}
+	return primary
 }
 
 // resolvedSubscriptionState 优先采用上游显式状态，缺失时再从套餐和时间推断。

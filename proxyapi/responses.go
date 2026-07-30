@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	responsescodec "github.com/wfu-work/proxy-api-lib/codec/responses"
 	"github.com/wfu-work/proxy-api-lib/openai"
 )
 
@@ -18,7 +19,7 @@ type ResponsesService struct {
 // Create 发送非流式 Responses 请求，并返回完整响应。
 // 请求中的 Credential 非空时会覆盖客户端默认凭据。
 func (s *ResponsesService) Create(ctx context.Context, req openai.ResponseRequest) (*openai.Response, error) {
-	body, err := marshalResponseRequest(req, false)
+	body, err := responsescodec.Encode(req, false)
 	if err != nil {
 		return nil, err
 	}
@@ -47,70 +48,6 @@ func (s *ResponsesService) Create(ctx context.Context, req openai.ResponseReques
 	return &out, nil
 }
 
-// marshalResponseRequest 将类型化请求转换为 OpenAI Responses 请求体。
-// stream 为 true 时显式写入 stream 字段，Extra 中的扩展字段最后合并。
-func marshalResponseRequest(req openai.ResponseRequest, stream bool) ([]byte, error) {
-	payload := map[string]any{}
-	if req.Model != "" {
-		payload["model"] = req.Model
-	}
-	if req.Input != nil {
-		payload["input"] = req.Input
-	}
-	if req.Instructions != "" {
-		payload["instructions"] = req.Instructions
-	}
-	if len(req.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			if tool == nil {
-				continue
-			}
-			data, err := json.Marshal(tool)
-			if err != nil {
-				return nil, err
-			}
-			var item map[string]any
-			if err := json.Unmarshal(data, &item); err != nil {
-				return nil, err
-			}
-			tools = append(tools, item)
-		}
-		payload["tools"] = tools
-	}
-	if req.ToolChoice != nil {
-		payload["tool_choice"] = req.ToolChoice
-	}
-	if req.Temperature != nil {
-		payload["temperature"] = *req.Temperature
-	}
-	if req.MaxOutputTokens != nil {
-		payload["max_output_tokens"] = *req.MaxOutputTokens
-	}
-	if req.Reasoning != nil {
-		payload["reasoning"] = req.Reasoning
-	}
-	if req.Store != nil {
-		payload["store"] = *req.Store
-	}
-	if len(req.Metadata) > 0 {
-		payload["metadata"] = req.Metadata
-	}
-	if req.ResponseFormat != nil {
-		payload["text"] = req.ResponseFormat
-	}
-	if req.PreviousResponseID != "" {
-		payload["previous_response_id"] = req.PreviousResponseID
-	}
-	if stream {
-		payload["stream"] = true
-	}
-	for key, value := range req.Extra {
-		payload[key] = value
-	}
-	return json.Marshal(payload)
-}
-
 // parseAPIError 将 OpenAI 错误响应解析为稳定的 APIError。
 // 当响应不符合标准错误结构时，保留状态码和原始响应内容。
 func parseAPIError(statusCode int, requestID string, body []byte) error {
@@ -123,7 +60,6 @@ func parseAPIError(statusCode int, requestID string, body []byte) error {
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Message != "" {
 		return &openai.APIError{
-			Provider:   "openai",
 			StatusCode: statusCode,
 			Code:       envelope.Error.Code,
 			Type:       envelope.Error.Type,
@@ -132,7 +68,6 @@ func parseAPIError(statusCode int, requestID string, body []byte) error {
 		}
 	}
 	return &openai.APIError{
-		Provider:   "openai",
 		StatusCode: statusCode,
 		Message:    fmt.Sprintf("OpenAI returned status %d: %s", statusCode, string(body)),
 		RequestID:  requestID,
