@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/wfu-work/proxy-api-lib/catalog"
 	responsescodec "github.com/wfu-work/proxy-api-lib/codec/responses"
 	"github.com/wfu-work/proxy-api-lib/openai"
 	"github.com/wfu-work/proxy-api-lib/transport"
@@ -35,7 +36,159 @@ type CodexModel struct {
 	ID          string          `json:"id"`
 	Slug        string          `json:"slug,omitempty"`
 	DisplayName string          `json:"display_name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	OwnedBy     string          `json:"owned_by,omitempty"`
+	Created     int64           `json:"created,omitempty"`
 	Raw         json.RawMessage `json:"-"`
+}
+
+// CodexCatalogSource 将指定 ChatGPT OAuth 账号的模型清单适配为统一官方目录来源。
+type CodexCatalogSource struct {
+	service       *CodexService
+	accountID     string
+	clientVersion string
+}
+
+// CatalogSource 创建指定账号的官方 Codex 模型目录来源。
+func (s *CodexService) CatalogSource(accountID, clientVersion string) catalog.Source {
+	if strings.TrimSpace(clientVersion) == "" {
+		clientVersion = DefaultCodexClientVersion
+	}
+	return &CodexCatalogSource{service: s, accountID: accountID, clientVersion: clientVersion}
+}
+
+// Identity 返回 Codex 模型目录的官方来源标识。
+func (s *CodexCatalogSource) Identity() catalog.SourceIdentity {
+	return catalog.SourceIdentity{
+		Vendor: catalog.VendorOpenAI, Product: catalog.ProductCodex, Protocol: catalog.ProtocolOpenAIResponses,
+	}
+}
+
+// ListModels 获取账号可见模型，并转换为不依赖 Codex 私有响应结构的公共模型信息。
+func (s *CodexCatalogSource) ListModels(ctx context.Context) ([]catalog.RemoteModel, error) {
+	if s == nil || s.service == nil {
+		return nil, errors.New("chatgpt: Codex catalog source is nil")
+	}
+	remote, err := s.service.Models(ctx, s.accountID, s.clientVersion)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]catalog.RemoteModel, 0, len(remote.Models))
+	for _, model := range remote.Models {
+		models = append(models, catalog.RemoteModel{
+			ID: model.ID, DisplayName: model.DisplayName, Description: model.Description,
+			OwnedBy: model.OwnedBy, Created: model.Created, Capabilities: codexModelCapabilities(model.Raw),
+			Raw: append(json.RawMessage(nil), model.Raw...),
+		})
+	}
+	return models, nil
+}
+
+// codexModelCapabilities 将 Codex 私有字段归一化为厂商无关的模型能力结构。
+// 未识别的官方字段仍完整保存在 Raw 中，后续可以在不丢数据的情况下继续扩展适配。
+func codexModelCapabilities(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(raw, &payload) != nil {
+		return nil
+	}
+	capabilities := map[string]json.RawMessage{}
+	if nested := payload["capabilities"]; len(nested) > 0 && string(nested) != "null" {
+		_ = json.Unmarshal(nested, &capabilities)
+	}
+	for _, key := range []string{
+		"supported_tools", "context_window", "max_context_window", "max_output_tokens", "input_modalities",
+		"visibility", "supported_in_api", "service_tiers", "additional_speed_tiers",
+	} {
+		if value := payload[key]; len(value) > 0 && string(value) != "null" {
+			capabilities[key] = value
+		}
+	}
+	if efforts := codexReasoningEfforts(payload, capabilities); len(efforts) > 0 {
+		encodedEfforts, _ := json.Marshal(efforts)
+		capabilities["reasoning_efforts"] = encodedEfforts
+	}
+	if effort := codexDefaultReasoningEffort(payload, capabilities); effort != "" {
+		encodedEffort, _ := json.Marshal(effort)
+		capabilities["default_reasoning_effort"] = encodedEffort
+	}
+	if len(capabilities) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(capabilities)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+// codexReasoningEfforts 兼容官方模型目录出现过的字符串数组和对象数组两种格式。
+func codexReasoningEfforts(payload, capabilities map[string]json.RawMessage) []string {
+	for _, candidate := range []json.RawMessage{
+		capabilities["reasoning_efforts"],
+		payload["supported_reasoning_levels"],
+		payload["supported_reasoning_efforts"],
+		payload["supportedReasoningEfforts"],
+	} {
+		if efforts := decodeReasoningEfforts(candidate); len(efforts) > 0 {
+			return efforts
+		}
+	}
+	return nil
+}
+
+// decodeReasoningEfforts 把推理等级数组转换为有序且去重的字符串列表。
+func decodeReasoningEfforts(raw json.RawMessage) []string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var items []any
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	efforts := make([]string, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		var effort string
+		switch value := item.(type) {
+		case string:
+			effort = value
+		case map[string]any:
+			for _, key := range []string{"effort", "reasoning_effort", "reasoningEffort"} {
+				if candidate, ok := value[key].(string); ok {
+					effort = candidate
+					break
+				}
+			}
+		}
+		effort = strings.TrimSpace(effort)
+		if effort == "" || seen[effort] {
+			continue
+		}
+		seen[effort] = true
+		efforts = append(efforts, effort)
+	}
+	return efforts
+}
+
+// codexDefaultReasoningEffort 兼容 Codex 内部目录和 App Server 的默认推理等级字段名。
+func codexDefaultReasoningEffort(payload, capabilities map[string]json.RawMessage) string {
+	for _, candidate := range []json.RawMessage{
+		capabilities["default_reasoning_effort"],
+		payload["default_reasoning_effort"],
+		payload["default_reasoning_level"],
+		payload["defaultReasoningEffort"],
+	} {
+		var effort string
+		if len(candidate) > 0 && json.Unmarshal(candidate, &effort) == nil {
+			if effort = strings.TrimSpace(effort); effort != "" {
+				return effort
+			}
+		}
+	}
+	return ""
 }
 
 // CodexResponse 是非流式 Responses 调用结果，包含可用于额度采样的原始响应头。
@@ -56,10 +209,10 @@ type CodexResponseStream struct {
 
 // Models 获取指定 OAuth 账号可用的官方 Codex 模型清单。
 func (s *CodexService) Models(ctx context.Context, accountID, clientVersion string) (*CodexModelCatalog, error) {
-	path := codexModelsPath
-	if clientVersion = strings.TrimSpace(clientVersion); clientVersion != "" {
-		path += "?" + url.Values{"client_version": []string{clientVersion}}.Encode()
+	if clientVersion = strings.TrimSpace(clientVersion); clientVersion == "" {
+		clientVersion = DefaultCodexClientVersion
 	}
+	path := codexModelsPath + "?" + url.Values{"client_version": []string{clientVersion}}.Encode()
 	req, err := s.client.newRequest(ctx, http.MethodGet, path, accountID, map[string]string{
 		"Accept-Encoding": "identity",
 	})

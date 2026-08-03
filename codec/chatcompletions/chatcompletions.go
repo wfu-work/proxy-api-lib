@@ -156,11 +156,21 @@ func convertTools(value any) []openai.Tool {
 }
 
 // usage 将 Responses Token 用量映射为 Chat Completions 字段名称。
-func usage(resp *openai.Response) map[string]int {
+func usage(resp *openai.Response) map[string]any {
 	if resp == nil || resp.Usage == nil {
-		return map[string]int{}
+		return map[string]any{}
 	}
-	return map[string]int{"prompt_tokens": resp.Usage.InputTokens, "completion_tokens": resp.Usage.OutputTokens, "total_tokens": resp.Usage.TotalTokens}
+	result := map[string]any{
+		"prompt_tokens": resp.Usage.InputTokens, "completion_tokens": resp.Usage.OutputTokens,
+		"total_tokens": resp.Usage.TotalTokens,
+	}
+	if resp.Usage.InputTokensDetails != nil {
+		result["prompt_tokens_details"] = map[string]int{"cached_tokens": resp.Usage.InputTokensDetails.CachedTokens}
+	}
+	if resp.Usage.OutputTokensDetails != nil {
+		result["completion_tokens_details"] = map[string]int{"reasoning_tokens": resp.Usage.OutputTokensDetails.ReasoningTokens}
+	}
+	return result
 }
 
 // asFloat64 将 JSON 或 Go 数值转换为 float64。

@@ -74,7 +74,22 @@ type ResponseContent struct {
 
 // Usage 记录 OpenAI 返回的输入、输出和总 Token 用量。
 type Usage struct {
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
-	TotalTokens  int `json:"total_tokens,omitempty"`
+	InputTokens         int                 `json:"input_tokens,omitempty"`
+	InputTokensDetails  *InputTokenDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokens        int                 `json:"output_tokens,omitempty"`
+	OutputTokensDetails *OutputTokenDetails `json:"output_tokens_details,omitempty"`
+	TotalTokens         int                 `json:"total_tokens,omitempty"`
+}
+
+// InputTokenDetails 记录输入 Token 中命中上游缓存的数量。
+//
+// OpenAI 的 input_tokens 已经包含 cached_tokens，计算费用时需要先从普通输入中扣除。
+type InputTokenDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
+}
+
+// OutputTokenDetails 记录输出 Token 中属于推理过程的数量。
+// 推理 Token 已包含在 output_tokens 中，此字段主要用于观测，不重复计费。
+type OutputTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }

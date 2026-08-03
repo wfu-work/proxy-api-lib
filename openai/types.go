@@ -24,6 +24,12 @@ type ResponseContent = domains.ResponseContent
 // Usage 是请求的 Token 用量。
 type Usage = domains.Usage
 
+// InputTokenDetails 是输入 Token 的缓存命中明细。
+type InputTokenDetails = domains.InputTokenDetails
+
+// OutputTokenDetails 是输出 Token 的推理用量明细。
+type OutputTokenDetails = domains.OutputTokenDetails
+
 // JSONSchema 是函数工具参数的 JSON Schema。
 type JSONSchema = domains.JSONSchema
 

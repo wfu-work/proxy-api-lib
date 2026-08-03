@@ -3,6 +3,7 @@ package chatgpt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -14,6 +15,11 @@ import (
 const accountsCheckPath = "/accounts/check/v4-2023-04-27"
 
 const subscriptionsPath = "/subscriptions"
+
+const (
+	accountsRequestMaxAttempts = 5
+	accountsRetryBaseDelay     = 200 * time.Millisecond
+)
 
 // AccountsService 提供 ChatGPT 账号与订阅权益查询。
 type AccountsService struct{ client *Client }
@@ -134,6 +140,24 @@ type DirectSubscriptionResponse struct {
 
 // Check 获取当前 OAuth Token 可访问的全部 ChatGPT 账号和权益。
 func (s *AccountsService) Check(ctx context.Context) (*AccountsCheckResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < accountsRequestMaxAttempts; attempt++ {
+		response, err := s.checkOnce(ctx)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !retryableAccountsError(err) || attempt == accountsRequestMaxAttempts-1 {
+			return nil, err
+		}
+		if err := waitAccountsRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (s *AccountsService) checkOnce(ctx context.Context) (*AccountsCheckResponse, error) {
 	headers := map[string]string{
 		"Origin":  DefaultBaseURL,
 		"Referer": DefaultBaseURL + "/",
@@ -203,6 +227,24 @@ func (s *AccountsService) Subscription(ctx context.Context, accountID string) (*
 // DirectSubscription 直接查询 subscriptions 接口。
 // 一些账号只在该接口暴露订阅到期信息，因此它也是 accounts/check 的补充来源。
 func (s *AccountsService) DirectSubscription(ctx context.Context, accountID string) (*DirectSubscriptionResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < accountsRequestMaxAttempts; attempt++ {
+		response, err := s.directSubscriptionOnce(ctx, accountID)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !retryableAccountsError(err) || attempt == accountsRequestMaxAttempts-1 {
+			return nil, err
+		}
+		if err := waitAccountsRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (s *AccountsService) directSubscriptionOnce(ctx context.Context, accountID string) (*DirectSubscriptionResponse, error) {
 	path := subscriptionsPath
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		path += "?" + url.Values{"account_id": []string{accountID}}.Encode()
@@ -222,6 +264,33 @@ func (s *AccountsService) DirectSubscription(ctx context.Context, accountID stri
 	response.Raw = append(response.Raw[:0], body...)
 	response.RequestID = requestID
 	return &response, nil
+}
+
+func retryableAccountsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return true
+	}
+	if apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= http.StatusInternalServerError {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(apiErr.Message))
+	return apiErr.StatusCode == http.StatusForbidden && strings.Contains(message, "<html")
+}
+
+func waitAccountsRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt+1) * accountsRetryBaseDelay
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func directSubscriptionSnapshot(requestedID string, direct *DirectSubscriptionResponse) SubscriptionSnapshot {

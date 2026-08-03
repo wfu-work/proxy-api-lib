@@ -22,6 +22,11 @@ const (
 	DefaultBaseURL = "https://chatgpt.com"
 	// DefaultOriginator 是 Codex CLI 请求使用的默认来源标识。
 	DefaultOriginator = "codex_cli_rs"
+	// DefaultCodexClientVersion 是模型目录兼容性判断使用的官方 Codex 客户端版本。
+	// GPT-5.6 系列要求客户端版本不低于 0.144.0。
+	DefaultCodexClientVersion = "0.144.0"
+	// DefaultUserAgent 是官方 Codex 请求使用的默认客户端标识。
+	DefaultUserAgent = DefaultOriginator + "/" + DefaultCodexClientVersion
 )
 
 // Client 调用 ChatGPT/Codex 账号内部接口。
@@ -105,7 +110,7 @@ func WithUserAgent(userAgent string) Option {
 func NewClient(opts ...Option) *Client {
 	cfg := clientConfig{
 		baseURL: DefaultBaseURL,
-		headers: map[string]string{"originator": DefaultOriginator},
+		headers: map[string]string{"originator": DefaultOriginator, "User-Agent": DefaultUserAgent},
 	}
 	for _, opt := range opts {
 		if opt != nil {
