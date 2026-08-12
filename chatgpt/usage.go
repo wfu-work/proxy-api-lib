@@ -17,13 +17,14 @@ type UsageService struct{ client *Client }
 // UsageSnapshot 是 ChatGPT/Codex 用量接口返回的账号限额快照。
 // RateLimit 通常包含 5 小时和 7 天窗口；具体窗口长度以服务端返回值为准。
 type UsageSnapshot struct {
-	PlanType             string
-	RateLimit            *RateLimit
-	Credits              json.RawMessage
-	AdditionalRateLimits []AdditionalRateLimit
-	Extra                map[string]json.RawMessage
-	Raw                  json.RawMessage
-	RequestID            string
+	PlanType              string
+	RateLimit             *RateLimit
+	Credits               json.RawMessage
+	RateLimitResetCredits *RateLimitResetCredits `json:"rate_limit_reset_credits,omitempty"`
+	AdditionalRateLimits  []AdditionalRateLimit
+	Extra                 map[string]json.RawMessage
+	Raw                   json.RawMessage
+	RequestID             string
 }
 
 // RateLimit 描述一组主、次限额窗口及可用状态。
@@ -91,12 +92,22 @@ func (s *UsageService) Get(ctx context.Context, accountID string) (*UsageSnapsho
 	if err != nil {
 		return nil, err
 	}
+	snapshot, err := ParseUsageSnapshot(body)
+	if err != nil {
+		return nil, err
+	}
+	snapshot.RequestID = requestID
+	return snapshot, nil
+}
+
+// ParseUsageSnapshot 将已保存的 /wham/usage JSON 重新解析为结构化快照。
+// 应用若持久化了 Raw，应通过本函数读取协议字段，不要自行声明 wire struct。
+func ParseUsageSnapshot(body []byte) (*UsageSnapshot, error) {
 	snapshot, err := decodeUsageSnapshot(body)
 	if err != nil {
 		return nil, err
 	}
 	snapshot.Raw = append(snapshot.Raw[:0], body...)
-	snapshot.RequestID = requestID
 	return snapshot, nil
 }
 
@@ -126,6 +137,16 @@ func decodeUsageSnapshot(body []byte) (*UsageSnapshot, error) {
 			snapshot.Credits = append(snapshot.Credits[:0], raw...)
 		}
 		delete(fields, "credits")
+	}
+	if raw, ok := fields["rate_limit_reset_credits"]; ok {
+		if len(raw) > 0 && string(raw) != "null" {
+			var credits RateLimitResetCredits
+			if err := json.Unmarshal(raw, &credits); err != nil {
+				return nil, err
+			}
+			snapshot.RateLimitResetCredits = &credits
+		}
+		delete(fields, "rate_limit_reset_credits")
 	}
 	if raw, ok := fields["additional_rate_limits"]; ok {
 		if len(raw) > 0 && string(raw) != "null" {

@@ -26,7 +26,7 @@ github.com/wfu-work/proxy-api-lib
 - OpenAI API key and caller-managed bearer-token credentials.
 - ChatGPT/Codex JWT display-field parsing and OAuth refresh-token exchange.
 - Canonical OAuth account-file parsing and normalized export.
-- ChatGPT/Codex wham limit windows, account lists, merged `accounts/check` + `subscriptions` data, and subscription expiry/renewal queries.
+- ChatGPT/Codex wham limit windows, earned rate-limit reset credits, account lists, merged `accounts/check` + `subscriptions` data, and subscription expiry/renewal queries.
 - Official Codex model discovery and Responses calls with `x-codex-*` response-header preservation.
 - Codex request normalization and SSE aggregation for callers that request a non-streaming response.
 - OpenAI Responses and Chat Completions request/response codecs for gateways.
@@ -86,6 +86,26 @@ models, err := accountClient.Codex.Models(ctx, accountID, clientVersion)
 ```
 
 `usage.RateLimit` contains the used percentage, window duration, and reset time. It commonly represents 5-hour and 7-day windows and preserves additional Code Review, Spark, and future limit buckets. It is not an exact token count. `Subscription` queries both account sources when available and fills missing plan, subscription state, expiry, renewal time, and `WillRenew` fields without inventing values.
+
+Earned rate-limit reset credits are also handled by this protocol boundary. The library owns endpoint compatibility, response parsing, normalized outcomes, and usage-summary fallback:
+
+```go
+credits, err := accountClient.Resets.List(ctx, accountID)
+if err != nil {
+	return err
+}
+
+// Reuse the same UUID when retrying one logical redemption attempt.
+result, err := accountClient.Resets.Consume(ctx, accountID, redemptionUUID, creditID)
+if err != nil {
+	return err
+}
+if result.Outcome.IsIdempotentSuccess() {
+	usage, err = accountClient.Usage.Get(ctx, accountID)
+}
+```
+
+Applications remain responsible for persisting the idempotency key and refreshing their local quota snapshot after `reset` or `alreadyRedeemed`.
 
 Applications that already implement secure refresh and storage can use `chatgpt.WithTokenSource` to read the latest access token before each request.
 

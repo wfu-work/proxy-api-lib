@@ -28,7 +28,7 @@ github.com/wfu-work/proxy-api-lib
 - OpenAI API Key 与调用方管理的 Bearer Token。
 - ChatGPT/Codex JWT 展示字段解析和 OAuth Refresh Token 刷新。
 - 规范 OAuth 账号文件解析与标准化导出。
-- ChatGPT/Codex wham 额度窗口、账号列表、`accounts/check` + `subscriptions` 合并，以及订阅到期/续费查询。
+- ChatGPT/Codex wham 额度窗口、额度重置券、账号列表、`accounts/check` + `subscriptions` 合并，以及订阅到期/续费查询。
 - 官方 Codex 模型发现、Responses 请求和 `x-codex-*` 响应头保留。
 - Codex 请求形态规范化，以及面向非流式调用方的上游 SSE 聚合。
 - 面向网关的 OpenAI Responses、Chat Completions 编解码。
@@ -88,6 +88,26 @@ models, err := accountClient.Codex.Models(ctx, accountID, clientVersion)
 ```
 
 `usage.RateLimit` 返回已用比例、窗口长度和重置时间，通常对应 5 小时和 7 天窗口，并保留 Code Review、Spark 等附加窗口。它不是精确 Token 数量。`Subscription` 会在可用时同时查询两类账号接口，补齐套餐、订阅状态、到期、续费时间和 `WillRenew`，不会猜测上游未提供的值。
+
+额度重置券同样由这个协议层处理。本库统一负责端点兼容、响应解析、结果归一化以及用量汇总回退：
+
+```go
+credits, err := accountClient.Resets.List(ctx, accountID)
+if err != nil {
+	return err
+}
+
+// 重试同一次逻辑兑换时必须复用相同 UUID。
+result, err := accountClient.Resets.Consume(ctx, accountID, redemptionUUID, creditID)
+if err != nil {
+	return err
+}
+if result.Outcome.IsIdempotentSuccess() {
+	usage, err = accountClient.Usage.Get(ctx, accountID)
+}
+```
+
+应用层仍负责持久化幂等键，并在 `reset` 或 `alreadyRedeemed` 后重新同步本地额度快照。
 
 应用已经实现安全的刷新与存储时，可通过 `chatgpt.WithTokenSource` 在每次请求前读取最新 Access Token。
 

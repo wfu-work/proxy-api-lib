@@ -41,6 +41,7 @@ type Client struct {
 	Usage    *UsageService
 	Accounts *AccountsService
 	Codex    *CodexService
+	Resets   *RateLimitResetService
 }
 
 type clientConfig struct {
@@ -145,6 +146,7 @@ func NewClient(opts ...Option) *Client {
 	client.Usage = &UsageService{client: client}
 	client.Accounts = &AccountsService{client: client}
 	client.Codex = &CodexService{client: client}
+	client.Resets = &RateLimitResetService{client: client}
 	return client
 }
 
@@ -171,6 +173,18 @@ func (c *Client) newRequest(ctx context.Context, method, path, accountID string,
 
 // newRequestBody 创建带 OAuth 鉴权、账号路由头和可选请求体的 ChatGPT 请求。
 func (c *Client) newRequestBody(ctx context.Context, method, path, accountID string, body []byte, extraHeaders map[string]string) (*http.Request, error) {
+	return c.newRequestBodyURL(ctx, method, c.baseURL+path, accountID, body, extraHeaders)
+}
+
+// newRootRequest 创建相对于 ChatGPT 站点根路径的请求。
+// 少量 Codex 账号接口同时存在 /backend-api 与 /api/codex 两套路由，
+// 路由兼容必须留在协议库中，不能由业务应用重复拼接官方 URL 和请求头。
+func (c *Client) newRootRequest(ctx context.Context, method, path, accountID string, body []byte, extraHeaders map[string]string) (*http.Request, error) {
+	rootURL := strings.TrimSuffix(c.baseURL, "/backend-api")
+	return c.newRequestBodyURL(ctx, method, rootURL+path, accountID, body, extraHeaders)
+}
+
+func (c *Client) newRequestBodyURL(ctx context.Context, method, requestURL, accountID string, body []byte, extraHeaders map[string]string) (*http.Request, error) {
 	if c == nil {
 		return nil, errors.New("chatgpt: client is nil")
 	}
@@ -180,7 +194,7 @@ func (c *Client) newRequestBody(ctx context.Context, method, path, accountID str
 	if c.credential == nil {
 		return nil, errors.New("chatgpt: OAuth access token is required")
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
