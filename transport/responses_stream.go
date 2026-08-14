@@ -10,6 +10,11 @@ import (
 	"github.com/wfu-work/proxy-api-lib/openai"
 )
 
+const (
+	responseSSEInitialBufferBytes = 64 << 10
+	responseSSEMaxLineBytes       = 64 << 20
+)
+
 // NewResponseStream 将 Responses SSE 响应体包装为统一事件迭代器。
 func NewResponseStream(body io.ReadCloser) *openai.ResponseStream {
 	reader := newResponseSSEReader(body)
@@ -28,7 +33,10 @@ type responseSSEReader struct {
 
 func newResponseSSEReader(body io.ReadCloser) *responseSSEReader {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	// Compaction output contains encrypted state, and the final completed event
+	// can repeat the full response in one SSE data line. Keep the reader bounded
+	// while allowing those events to grow beyond the old 4 MiB limit.
+	scanner.Buffer(make([]byte, 0, responseSSEInitialBufferBytes), responseSSEMaxLineBytes)
 	return &responseSSEReader{body: body, scanner: scanner}
 }
 
