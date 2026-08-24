@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,6 +52,34 @@ type RateLimitResetCredit struct {
 	ExpiresAt   *int64 `json:"expires_at,omitempty"`
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
+}
+
+// UnmarshalJSON 兼容官方接口在不同版本中返回的 Unix 数字时间戳和字符串时间。
+// granted_at / expires_at 只是展示元数据；无法识别时按缺失处理，不能阻断券的查询和兑换。
+func (c *RateLimitResetCredit) UnmarshalJSON(data []byte) error {
+	if c == nil {
+		return errors.New("chatgpt: reset credit is nil")
+	}
+	var wire struct {
+		ID          string          `json:"id"`
+		ResetType   string          `json:"reset_type"`
+		Status      string          `json:"status"`
+		GrantedAt   json.RawMessage `json:"granted_at"`
+		ExpiresAt   json.RawMessage `json:"expires_at"`
+		Title       string          `json:"title"`
+		Description string          `json:"description"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	grantedAt, _ := parseResetCreditWireTimestamp(wire.GrantedAt)
+	expiresAt, _ := parseResetCreditWireTimestamp(wire.ExpiresAt)
+	*c = RateLimitResetCredit{
+		ID: wire.ID, ResetType: wire.ResetType, Status: wire.Status,
+		GrantedAt: grantedAt, ExpiresAt: expiresAt,
+		Title: wire.Title, Description: wire.Description,
+	}
+	return nil
 }
 
 // ConsumeRateLimitResetCreditResult 是一次幂等兑换的归一化结果。
@@ -361,6 +391,45 @@ func resetCreditTimestamp(value *int64) (time.Time, bool) {
 		seconds /= 1000
 	}
 	return time.Unix(seconds, nanoseconds), true
+}
+
+func parseResetCreditWireTimestamp(raw json.RawMessage) (*int64, error) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return nil, nil
+	}
+	if strings.HasPrefix(value, "\"") {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, err
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return nil, nil
+		}
+		if timestamp, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return &timestamp, nil
+		}
+		for _, layout := range []string{
+			time.RFC3339Nano,
+			"2006-01-02 15:04:05.999999999Z07:00",
+			"2006-01-02 15:04:05.999999999Z07",
+			"2006-01-02T15:04:05.999999999Z07",
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02T15:04:05.999999999",
+		} {
+			if parsed, err := time.Parse(layout, text); err == nil {
+				timestamp := parsed.UnixMilli()
+				return &timestamp, nil
+			}
+		}
+		return nil, fmt.Errorf("unsupported timestamp %q", text)
+	}
+	timestamp, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("must be an integer or time string: %w", err)
+	}
+	return &timestamp, nil
 }
 
 func isAPIStatus(err error, statusCode int) bool {
