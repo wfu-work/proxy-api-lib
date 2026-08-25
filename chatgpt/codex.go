@@ -414,6 +414,9 @@ func normalizeCodexContent(role string, content any) any {
 
 func normalizeCodexContentBlock(defaultType string, block map[string]any) map[string]any {
 	blockType, _ := block["type"].(string)
+	if blockType == "image_url" {
+		return normalizeCodexImageBlock(block)
+	}
 	if blockType != "" && blockType != "text" {
 		return block
 	}
@@ -425,6 +428,50 @@ func normalizeCodexContentBlock(defaultType string, block map[string]any) map[st
 		out[key] = value
 	}
 	out["type"] = defaultType
+	return out
+}
+
+// normalizeCodexImageBlock 将 Chat Completions 的 image_url 内容块转换为
+// Responses API 要求的 input_image 结构。Chat Completions 将 URL 和 detail
+// 放在 image_url 对象中，而 Responses API 将它们放在内容块顶层。
+func normalizeCodexImageBlock(block map[string]any) map[string]any {
+	source, ok := block["image_url"]
+	if !ok {
+		return block
+	}
+
+	out := make(map[string]any, len(block)+2)
+	for key, value := range block {
+		if key != "type" && key != "image_url" {
+			out[key] = value
+		}
+	}
+	out["type"] = "input_image"
+
+	switch image := source.(type) {
+	case string:
+		if image != "" {
+			out["image_url"] = image
+		}
+	case map[string]any:
+		if url, ok := image["url"].(string); ok && url != "" {
+			out["image_url"] = url
+		}
+		if fileID, ok := image["file_id"].(string); ok && fileID != "" {
+			out["file_id"] = fileID
+		}
+		if detail, ok := image["detail"]; ok {
+			out["detail"] = detail
+		}
+	default:
+		return block
+	}
+
+	if _, hasURL := out["image_url"]; !hasURL {
+		if _, hasFileID := out["file_id"]; !hasFileID {
+			return block
+		}
+	}
 	return out
 }
 
