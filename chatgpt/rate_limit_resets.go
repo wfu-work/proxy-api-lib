@@ -306,9 +306,16 @@ func decodeRateLimitResetCredits(body []byte) (*RateLimitResetCredits, error) {
 
 func decodeConsumeRateLimitResetCreditResult(body []byte) (*ConsumeRateLimitResetCreditResult, error) {
 	var wire struct {
-		Outcome         string          `json:"outcome"`
-		Output          string          `json:"output"`
-		CreditID        string          `json:"credit_id"`
+		Outcome string `json:"outcome"`
+		Output  string `json:"output"`
+		// code is the response field used by the current ChatGPT backend.
+		// The app-server exposes the same value as outcome, but this client
+		// talks to the backend endpoint directly.
+		Code     string `json:"code"`
+		CreditID string `json:"credit_id"`
+		Credit   *struct {
+			ID string `json:"id"`
+		} `json:"credit"`
 		RedeemRequestID string          `json:"redeem_request_id"`
 		WindowsReset    json.RawMessage `json:"windows_reset"`
 	}
@@ -320,11 +327,18 @@ func decodeConsumeRateLimitResetCreditResult(body []byte) (*ConsumeRateLimitRese
 		outcome = strings.TrimSpace(wire.Output)
 	}
 	if outcome == "" {
+		outcome = strings.TrimSpace(wire.Code)
+	}
+	if outcome == "" {
 		return nil, errors.New("chatgpt: reset credit response has no outcome")
+	}
+	creditID := strings.TrimSpace(wire.CreditID)
+	if creditID == "" && wire.Credit != nil {
+		creditID = strings.TrimSpace(wire.Credit.ID)
 	}
 	return &ConsumeRateLimitResetCreditResult{
 		Outcome:         normalizeResetCreditOutcome(outcome),
-		CreditID:        strings.TrimSpace(wire.CreditID),
+		CreditID:        creditID,
 		RedeemRequestID: strings.TrimSpace(wire.RedeemRequestID),
 		WindowsReset:    append(json.RawMessage(nil), wire.WindowsReset...),
 		Raw:             append(json.RawMessage(nil), body...),
