@@ -23,8 +23,8 @@ const (
 	// DefaultOriginator 是 Codex CLI 请求使用的默认来源标识。
 	DefaultOriginator = "codex_cli_rs"
 	// DefaultCodexClientVersion 是模型目录兼容性判断使用的官方 Codex 客户端版本。
-	// GPT-5.6 系列要求客户端版本不低于 0.144.0。
-	DefaultCodexClientVersion = "0.144.0"
+	// GPT-6 Astra 要求客户端版本不低于 0.153.0。
+	DefaultCodexClientVersion = "0.153.1"
 	// DefaultUserAgent 是官方 Codex 请求使用的默认客户端标识。
 	DefaultUserAgent = DefaultOriginator + "/" + DefaultCodexClientVersion
 )
